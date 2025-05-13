@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+<link rel="stylesheet" type="text/css" href="popup.css">
+  <title>Bookmark Hub</title>
+  <meta charset="utf-8">
+</head>
+<body>
+  <div class="header">
+    <svg class="logo" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+    </svg>
+    <h1>Bookmark Hub</h1>
+  </div>
+
+  <div id="main-form">
+    <form id="bookmark-form">
+      <div class="form-group">
+        <label for="url">URL</label>
+        <input type="url" id="url" readonly>
+      </div>
+      
+      <div class="form-group">
+        <label for="title">Title</label>
+        <input type="text" id="title">
+      </div>
+      
+      <div class="form-group">
+        <label for="description">Description (optional)</label>
+        <textarea id="description" placeholder="Add a short description..."></textarea>
+      </div>
+      
+      <div class="form-group">
+        <label for="category">Category</label>
+        <select id="category">
+          <option value="work">Work</option>
+          <option value="personal">Personal</option>
+          <option value="research">Research</option>
+          <option value="entertainment">Entertainment</option>
+          <option value="development">Development</option>
+          <option value="design">Design</option>
+          <option value="other" selected>Other</option>
+        </select>
+      </div>
+      
+      <div class="form-group">
+        <label for="tags">Tags (comma separated)</label>
+        <input type="text" id="tags" placeholder="tag1, tag2, tag3">
+      </div>
+      
+      <button type="submit" class="btn">Save to Bookmark Hub</button>
+    </form>
+    
+    <div id="status-message" class="status"></div>
+    
+    <div class="form-footer">
+      <span id="connection-status">Not connected</span>
+      <a href="#" id="settings-link" class="settings-link">Settings</a>
+    </div>
+  </div>
+  
+  <div id="settings-form" style="display: none;">
+    <div class="form-group">
+      <label for="api-url">API URL</label>
+      <input type="url" id="api-url" placeholder="https://yourdomain.com/api">
+    </div>
+    
+    <div class="form-group">
+      <label for="api-key">API Key (if required)</label>
+      <input type="text" id="api-key" placeholder="Optional">
+    </div>
+    
+    <div class="toggle-container">
+      <label for="auto-sync">Auto-sync Chrome bookmarks</label>
+      <label class="toggle">
+        <input type="checkbox" id="auto-sync">
+        <span class="slider"></span>
+      </label>
+    </div>
+    
+    <button id="save-settings" class="btn">Save Settings</button>
+    <button id="back-button" class="btn" style="background-color: #6b7280; margin-top: 8px;">Back</button>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

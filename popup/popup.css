@@ -1,0 +1,130 @@
+body {
+  width: 320px;
+  padding: 16px;
+  font-family: system-ui, -apple-system, sans-serif;
+}
+.header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.logo {
+  width: 24px;
+  height: 24px;
+  margin-right: 8px;
+  color: #6366f1;
+}
+h1 {
+  font-size: 16px;
+  margin: 0;
+  color: #111827;
+}
+.form-group {
+  margin-bottom: 12px;
+}
+label {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 4px;
+  color: #374151;
+}
+input, textarea, select {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 14px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  box-sizing: border-box;
+}
+textarea {
+  resize: vertical;
+  min-height: 60px;
+}
+.btn {
+  background-color: #6366f1;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 14px;
+  cursor: pointer;
+  width: 100%;
+  font-weight: 500;
+  transition: background-color 0.2s;
+}
+.btn:hover {
+  background-color: #4f46e5;
+}
+.status {
+  margin-top: 16px;
+  padding: 12px;
+  border-radius: 6px;
+  font-size: 14px;
+  display: none;
+}
+.success {
+  background-color: #ecfdf5;
+  color: #047857;
+  display: block;
+}
+.error {
+  background-color: #fef2f2;
+  color: #b91c1c;
+  display: block;
+}
+.form-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 16px;
+  font-size: 12px;
+}
+.settings-link {
+  color: #6366f1;
+  text-decoration: none;
+}
+.toggle-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.toggle {
+  position: relative;
+  display: inline-block;
+  width: 40px;
+  height: 20px;
+}
+.toggle input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  transition: .4s;
+  border-radius: 34px;
+}
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 16px;
+  width: 16px;
+  left: 2px;
+  bottom: 2px;
+  background-color: white;
+  transition: .4s;
+  border-radius: 50%;
+}
+input:checked + .slider {
+  background-color: #6366f1;
+}
+input:checked + .slider:before {
+  transform: translateX(20px);
+}
