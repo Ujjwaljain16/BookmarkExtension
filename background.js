@@ -167,7 +167,7 @@ chrome.bookmarks.onCreated.addListener(async (id) => {
     // Show appropriate notification based on whether it was a duplicate
     chrome.notifications.create({
       type: 'basic',
-      iconUrl: 'icon48.png', // Simplified path
+      iconUrl: '/icons/icon48.png', // Make sure the path is correct
       title: result.wasDuplicate ? 'Bookmark Updated' : 'Bookmark Synced',
       message: result.wasDuplicate 
         ? `Updated "${bookmarkData.title}" in Bookmark Hub`
@@ -187,7 +187,7 @@ chrome.bookmarks.onCreated.addListener(async (id) => {
 
     chrome.notifications.create({
       type: 'basic',
-      iconUrl: 'icon48.png', // Simplified path
+      iconUrl: '/icons/icon48.png', // Make sure the path is correct
       title: 'Sync Failed',
       message: errorMessage
     });
@@ -222,57 +222,66 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
       throw new Error('API URL not configured. Please set it in the extension settings.');
     }
 
-    console.log('API URL:', apiUrl);
-    const normalizedUrl = normalizeUrl(bookmarkUrl);
-    console.log('Normalized URL:', normalizedUrl);
+    // Get the bookmark ID from the URL
+    const bookmarkId = await getBookmarkId(bookmarkUrl);
     
-    try {
-      // First try to get all bookmarks and find the one with matching URL
-      const getAllResponse = await fetch(apiUrl);
-      if (!getAllResponse.ok) {
-        throw new Error(`Failed to get bookmarks: ${getAllResponse.status}`);
-      }
-      
-      const allBookmarks = await getAllResponse.json();
-      const matchingBookmark = allBookmarks.find(b => normalizeUrl(b.url) === normalizedUrl);
-      
-      if (matchingBookmark) {
-        console.log('Found matching bookmark ID:', matchingBookmark.id);
-        
-        // Delete by ID
-        const deleteEndpoint = `${apiUrl}/${matchingBookmark.id}`;
-        console.log('Delete endpoint:', deleteEndpoint);
-        
-        const deleteResponse = await fetch(deleteEndpoint, {
-          method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json'
-          }
-        });
-        
-        if (!deleteResponse.ok) {
-          throw new Error(`Delete failed with status: ${deleteResponse.status}`);
-        }
-        
-        console.log('Bookmark deleted successfully by ID');
-        
-        // Show success notification
-        chrome.notifications.create({
-          type: 'basic',
-          iconUrl: 'icon48.png', // Simplified path
-          title: 'Bookmark Removed',
-          message: `Successfully removed bookmark from Bookmark Hub`
-        });
-        
-        return;
-      } else {
-        console.log('No matching bookmark found with URL:', normalizedUrl);
-        throw new Error('Bookmark not found');
-      }
-    } catch (error) {
-      console.error('Error during bookmark deletion:', error);
-      throw error;
+    if (!bookmarkId) {
+      console.log('Bookmark ID not found for URL:', bookmarkUrl);
+      throw new Error('Bookmark not found in Bookmark Hub');
     }
+    
+    console.log('Found bookmark ID for deletion:', bookmarkId);
+    
+    // Delete by ID endpoint
+    const deleteEndpoint = `${apiUrl}/${bookmarkId}`;
+    
+    // Send delete request to API
+    const response = await fetch(deleteEndpoint, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      // If ID-based deletion fails, try deleting by URL as fallback
+      console.log('ID-based deletion failed, trying URL-based deletion');
+      
+      const normalizedUrl = normalizeUrl(bookmarkUrl);
+      const encodedUrl = encodeURIComponent(normalizedUrl);
+      const urlDeleteEndpoint = `${apiUrl}/url/${encodedUrl}`;
+      
+      const urlResponse = await fetch(urlDeleteEndpoint, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        }
+      });
+      
+      if (!urlResponse.ok) {
+        const errorData = await urlResponse.json().catch(() => ({}));
+        throw new Error(errorData.message || `HTTP error! status: ${urlResponse.status}`);
+      }
+      
+      // Remove from cache
+      bookmarkCache.delete(normalizedUrl);
+    } else {
+      // Remove from cache if ID-based deletion was successful
+      const normalizedUrl = normalizeUrl(bookmarkUrl);
+      bookmarkCache.delete(normalizedUrl);
+    }
+
+    console.log('Bookmark removed from hub successfully');
+
+    // Show success notification
+    chrome.notifications.create({
+      type: 'basic',
+      iconUrl: '/icons/icon48.png', // Make sure the path is correct
+      title: 'Bookmark Removed',
+      message: `Successfully removed bookmark from Bookmark Hub`
+    });
   } catch (error) {
     console.error('Error removing bookmark from hub:', {
       error: error.message,
@@ -281,10 +290,10 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
       apiUrl: await chrome.storage.sync.get('apiUrl').then(data => data.apiUrl)
     });
 
-    // Show error notification without icon (to avoid download error)
+    // Show error notification
     chrome.notifications.create({
       type: 'basic',
-      iconUrl: 'icon48.png', // Simplified path
+      iconUrl: '/icons/icon48.png', // Make sure the path is correct
       title: 'Remove Failed',
       message: 'Failed to remove bookmark from Bookmark Hub'
     });
@@ -301,90 +310,34 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (isChromeInternalUrl(url)) {
       chrome.notifications.create({
         type: 'basic',
-        iconUrl: 'icon48.png', // Simplified path
+        iconUrl: '/icons/icon48.png',
         title: 'Bookmark Hub',
         message: 'Cannot save Chrome internal pages'
       });
       return;
     }
     
-    // Get settings
-    const settings = await chrome.storage.sync.get(['apiUrl', 'apiKey']);
-    
-    if (!settings.apiUrl) {
+    try {
+      const saved = await processBookmarkFromExtension({ title, url });
+      
       chrome.notifications.create({
         type: 'basic',
-        iconUrl: 'icon48.png', // Simplified path
-        title: 'Bookmark Hub Error',
-        message: 'Please configure the API URL in extension settings'
+        iconUrl: '/icons/icon48.png',
+        title: 'Bookmark Hub',
+        message: 'Bookmark saved successfully!'
       });
-      return;
-    }
-
-    try {
-      // Get favicon
-      let favicon = null;
-      try {
-        const faviconUrl = new URL(url);
-        favicon = `https://www.google.com/s2/favicons?domain=${faviconUrl.hostname}&sz=64`;
-      } catch (e) {
-        console.warn('Could not generate favicon URL:', e);
-      }
-
-      // Prepare bookmark data
-      let bookmarkData = {
-        url,
-        title,
-        description: '',
-        favicon,
-        category: 'other',
-        tags: [],
-        source: 'extension'
-      };
-
-      // AI enrich
-      const enrichedData = await aiEnrichBookmark(bookmarkData);
-      bookmarkData = { ...bookmarkData, ...enrichedData };
-
-      // Send to API
-      const response = await fetch(settings.apiUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(settings.apiKey && { 'Authorization': `Bearer ${settings.apiKey}` })
-        },
-        body: JSON.stringify(bookmarkData)
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const result = await response.json();
-      console.log('Bookmark saved successfully:', result);
       
       // Update cache with bookmark ID
-      if (result.bookmark && result.bookmark.id) {
-        bookmarkCache.set(normalizeUrl(url), result.bookmark.id);
+      if (saved && saved.id) {
+        bookmarkCache.set(normalizeUrl(url), saved.id);
       }
-
-      // Show appropriate notification based on whether it was a duplicate
-      chrome.notifications.create({
-        type: 'basic',
-        iconUrl: 'icon48.png', // Simplified path
-        title: result.wasDuplicate ? 'Bookmark Updated' : 'Bookmark Hub',
-        message: result.wasDuplicate 
-          ? `Updated "${title}" in Bookmark Hub`
-          : 'Bookmark saved successfully'
-      });
     } catch (error) {
-      console.error('Failed to save bookmark:', error);
-      
+      console.error('Error saving bookmark:', error);
       chrome.notifications.create({
         type: 'basic',
-        iconUrl: 'icon48.png', // Simplified path
+        iconUrl: '/icons/icon48.png',
         title: 'Bookmark Hub Error',
-        message: 'Failed to save bookmark. Check extension settings.'
+        message: error.message || 'Failed to save bookmark'
       });
     }
   }

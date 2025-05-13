@@ -1,3 +1,19 @@
+// Add processBookmarkFromExtension directly here
+async function processBookmarkFromExtension({ title, url }) {
+  // You can expand this logic as needed, but for now just send to API
+  const apiUrl = await new Promise(resolve => {
+    chrome.storage.sync.get(['apiUrl'], data => resolve(data.apiUrl));
+  });
+  const bookmarkData = { title, url };
+  const response = await fetch(apiUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(bookmarkData)
+  });
+  if (!response.ok) throw new Error('Failed to save bookmark');
+  return await response.json();
+}
+
 document.addEventListener('DOMContentLoaded', function() {
   const form = document.getElementById('bookmark-form');
   const statusMessage = document.getElementById('status-message');
@@ -117,81 +133,31 @@ document.addEventListener('DOMContentLoaded', function() {
       
       const url = document.getElementById('url').value;
       const title = document.getElementById('title').value;
-      const description = document.getElementById('description').value;
-      const category = document.getElementById('category').value;
-      const tags = document.getElementById('tags').value.split(',').map(tag => tag.trim()).filter(Boolean);
       
-      // Get favicon
-      let favicon = null;
       try {
-        const faviconUrl = new URL(url);
-        favicon = `${faviconUrl.origin}/favicon.ico`;
-      } catch (e) {
-        console.warn('Could not generate favicon URL:', e);
+        const saved = await processBookmarkFromExtension({ title, url });
+        showStatus('Bookmark saved successfully!', 'success');
+        
+        // Clear form fields except URL (which is readonly)
+        document.getElementById('description').value = '';
+        document.getElementById('tags').value = '';
+        document.getElementById('category').value = 'other';
+      } catch (error) {
+        console.error('Error details:', error);
+        let errorMessage = 'Error saving bookmark. ';
+        
+        if (error.message.includes('Failed to fetch')) {
+          errorMessage += 'Could not connect to the server. Please check if the server is running and the API URL is correct.';
+        } else if (error.message.includes('already exists')) {
+          errorMessage = 'This URL is already bookmarked.';
+        } else {
+          errorMessage += error.message;
+        }
+        
+        showStatus(errorMessage, 'error');
       }
-      
-      const bookmarkData = {
-        url,
-        title,
-        description,
-        favicon,
-        category,
-        tags,
-        source: 'extension'
-      };
-      
-      sendBookmark(data.apiUrl, bookmarkData, data.apiKey);
     });
   });
-  
-  function sendBookmark(apiUrl, bookmarkData, apiKey) {
-    console.log('Sending bookmark to:', apiUrl);
-    console.log('Bookmark data:', bookmarkData);
-    
-    statusMessage.textContent = 'Sending...';
-    statusMessage.className = 'status';
-    
-    fetch(apiUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        ...(apiKey && { 'Authorization': `Bearer ${apiKey}` })
-      },
-      body: JSON.stringify(bookmarkData)
-    })
-    .then(response => {
-      if (!response.ok) {
-        return response.json().then(err => {
-          throw new Error(err.message || `HTTP error! status: ${response.status}`);
-        });
-      }
-      return response.json();
-    })
-    .then(data => {
-      showStatus('Bookmark saved successfully!', 'success');
-      console.log('Success:', data);
-      
-      // Clear form fields except URL (which is readonly)
-      document.getElementById('description').value = '';
-      document.getElementById('tags').value = '';
-      document.getElementById('category').value = 'other';
-    })
-    .catch(error => {
-      console.error('Error details:', error);
-      let errorMessage = 'Error saving bookmark. ';
-      
-      if (error.message.includes('Failed to fetch')) {
-        errorMessage += 'Could not connect to the server. Please check if the server is running and the API URL is correct.';
-      } else if (error.message.includes('already exists')) {
-        errorMessage = 'This URL is already bookmarked.';
-      } else {
-        errorMessage += error.message;
-      }
-      
-      showStatus(errorMessage, 'error');
-    });
-  }
   
   function showStatus(message, type) {
     statusMessage.textContent = message;
@@ -204,4 +170,54 @@ document.addEventListener('DOMContentLoaded', function() {
       }, 3000);
     }
   }
+
+  // Add import bookmarks logic to popup.js
+  async function getAllBookmarks() {
+    return new Promise((resolve) => {
+      chrome.bookmarks.getTree((nodes) => {
+        const flat = [];
+        function traverse(node, parentCategory) {
+          if (node.url && node.title) {
+            flat.push({
+              url: node.url,
+              title: node.title,
+              category: parentCategory || 'Other'
+            });
+          }
+          if (node.children) {
+            node.children.forEach(child => traverse(child, node.title || parentCategory));
+          }
+        }
+        nodes.forEach(n => traverse(n, 'Other'));
+        resolve(flat);
+      });
+    });
+  }
+
+  document.getElementById('import-bookmarks').addEventListener('click', async () => {
+    const importButton = document.getElementById('import-bookmarks');
+    const originalText = importButton.textContent;
+    try {
+      importButton.disabled = true;
+      importButton.textContent = 'Importing...';
+      const apiUrl = 'http://localhost:3000/api/bookmarks/import';
+      const bookmarks = await getAllBookmarks();
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(bookmarks)
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `Failed to import bookmarks: ${response.status}`);
+      }
+      const result = await response.json();
+      alert(`Import successful!\nImported: ${result.added} bookmarks\nUpdated: ${result.updated} bookmarks`);
+    } catch (err) {
+      alert('Error importing bookmarks: ' + err.message);
+    } finally {
+      importButton.disabled = false;
+      importButton.textContent = originalText;
+    }
+  });
 });
