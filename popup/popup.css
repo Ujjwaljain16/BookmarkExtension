@@ -2,11 +2,14 @@ body {
   width: 320px;
   padding: 16px;
   font-family: system-ui, -apple-system, sans-serif;
+  background-color: #fafafa;
 }
 .header {
   display: flex;
   align-items: center;
   margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e5e7eb;
 }
 .logo {
   width: 24px;
@@ -18,6 +21,7 @@ h1 {
   font-size: 16px;
   margin: 0;
   color: #111827;
+  font-weight: 600;
 }
 .form-group {
   margin-bottom: 12px;
@@ -27,6 +31,7 @@ label {
   font-size: 12px;
   margin-bottom: 4px;
   color: #374151;
+  font-weight: 500;
 }
 input, textarea, select {
   width: 100%;
@@ -35,6 +40,13 @@ input, textarea, select {
   border: 1px solid #d1d5db;
   border-radius: 6px;
   box-sizing: border-box;
+  background-color: white;
+  transition: border-color 0.2s;
+}
+input:focus, textarea:focus, select:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
 }
 textarea {
   resize: vertical;
@@ -44,16 +56,35 @@ textarea {
   background-color: #6366f1;
   color: white;
   border: none;
-  padding: 8px 16px;
+  padding: 10px 16px;
   border-radius: 6px;
   font-size: 14px;
   cursor: pointer;
   width: 100%;
   font-weight: 500;
   transition: background-color 0.2s;
+  margin-bottom: 8px;
 }
 .btn:hover {
   background-color: #4f46e5;
+}
+.btn:disabled {
+  background-color: #9ca3af;
+  cursor: not-allowed;
+}
+.btn-secondary {
+  background-color: #f3f4f6;
+  color: #374151;
+  border: 1px solid #d1d5db;
+  padding: 6px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  margin-left: 8px;
+  transition: background-color 0.2s;
+}
+.btn-secondary:hover {
+  background-color: #e5e7eb;
 }
 .status {
   margin-top: 16px;
@@ -66,11 +97,13 @@ textarea {
   background-color: #ecfdf5;
   color: #047857;
   display: block;
+  border: 1px solid #a7f3d0;
 }
 .error {
   background-color: #fef2f2;
   color: #b91c1c;
   display: block;
+  border: 1px solid #fecaca;
 }
 .form-footer {
   display: flex;
@@ -78,16 +111,23 @@ textarea {
   align-items: center;
   margin-top: 16px;
   font-size: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e5e7eb;
 }
 .settings-link {
   color: #6366f1;
   text-decoration: none;
+  font-weight: 500;
+}
+.settings-link:hover {
+  text-decoration: underline;
 }
 .toggle-container {
   display: flex;
   justify-content: space-between;
   align-items: center;
   margin-bottom: 12px;
+  padding: 8px 0;
 }
 .toggle {
   position: relative;

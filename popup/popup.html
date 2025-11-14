@@ -2,7 +2,7 @@
 <html>
 <head>
 <link rel="stylesheet" type="text/css" href="popup.css">
-  <title>Bookmark Hub</title>
+  <title>Fuze Web Clipper</title>
   <meta charset="utf-8">
 </head>
 <body>
@@ -10,7 +10,7 @@
     <svg class="logo" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
     </svg>
-    <h1>Bookmark Hub</h1>
+    <h1>Fuze Web Clipper</h1>
   </div>
 
   <div id="main-form">
@@ -34,6 +34,10 @@
         <label for="category">Category</label>
         <select id="category">
           <option value="other" selected>Other</option>
+          <option value="work">Work</option>
+          <option value="personal">Personal</option>
+          <option value="research">Research</option>
+          <option value="entertainment">Entertainment</option>
         </select>
         <button type="button" id="new-category-btn" class="btn-secondary">+ New Category</button>
       </div>
@@ -43,7 +47,7 @@
         <input type="text" id="tags" placeholder="tag1, tag2, tag3">
       </div>
       
-      <button type="submit" class="btn">Save to Bookmark Hub</button>
+      <button type="submit" class="btn">Save to Fuze</button>
     </form>
     
     <div id="status-message" class="status"></div>
@@ -56,14 +60,21 @@
   
   <div id="settings-form" style="display: none;">
     <div class="form-group">
-      <label for="api-url">API URL</label>
-      <input type="url" id="api-url" placeholder="https://yourdomain.com/api">
+      <label for="api-url">Fuze API URL</label>
+      <input type="url" id="api-url" placeholder="http://localhost:5000">
     </div>
     
     <div class="form-group">
-      <label for="api-key">API Key (if required)</label>
-      <input type="text" id="api-key" placeholder="Optional">
+      <label for="email">Email</label>
+      <input type="email" id="email" placeholder="your@email.com">
     </div>
+    
+    <div class="form-group">
+      <label for="password">Password</label>
+      <input type="password" id="password" placeholder="Your password">
+    </div>
+    
+    <button id="login-btn" class="btn">Login to Fuze</button>
     
     <div class="toggle-container">
       <label for="auto-sync">Auto-sync Chrome bookmarks</label>

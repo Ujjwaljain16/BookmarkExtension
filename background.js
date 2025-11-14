@@ -8,33 +8,23 @@ const DEFAULT_SETTINGS = {
 
 // Initialize 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.sync.get('settings', (data) => {
-    if (!data.settings) {
-      chrome.storage.sync.set({ settings: DEFAULT_SETTINGS });
+  chrome.storage.local.get('autoSync', (data) => {
+    if (data.autoSync === undefined) {
+      chrome.storage.local.set({ autoSync: true });
     }
   });
 
   chrome.contextMenus.create({
-    id: 'save-to-bookmark-hub',
-    title: 'Save to Bookmark Hub',
+    id: 'save-to-fuze',
+    title: 'Save to Fuze',
     contexts: ['page', 'link']
   });
 });
 
-// AI analysis function
-async function aiEnrichBookmark(bookmark) {
-  try {
-    const response = await fetch('http://localhost:3000/api/bookmarks/ai-enrich', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(bookmark)
-    });
-    if (!response.ok) throw new Error('AI enrichment failed');
-    return await response.json();
-  } catch (err) {
-    console.warn('AI enrichment failed, using original bookmark:', err);
-    return bookmark;
-  }
+// Helper function to get auth token
+async function getAuthToken() {
+  const { authToken } = await chrome.storage.local.get('authToken');
+  return authToken;
 }
 
 // Helper function to check if URL is a Chrome internal URL
@@ -77,14 +67,22 @@ async function getBookmarkId(url) {
     }
     
     // If not in cache, fetch all bookmarks and find the matching one
-    const { apiUrl } = await chrome.storage.sync.get('apiUrl');
+    const { apiUrl } = await chrome.storage.local.get('apiUrl');
     if (!apiUrl) return null;
     
-    const response = await fetch(apiUrl);
+    const authToken = await getAuthToken();
+    if (!authToken) return null;
+    
+    const response = await fetch(`${apiUrl}/api/bookmarks`, {
+      headers: {
+        'Authorization': `Bearer ${authToken}`,
+        'Accept': 'application/json'
+      }
+    });
     if (!response.ok) return null;
     
-    const bookmarks = await response.json();
-    const bookmark = bookmarks.find(b => normalizeUrl(b.url) === normalizedUrl);
+    const data = await response.json();
+    const bookmark = data.bookmarks.find(b => normalizeUrl(b.url) === normalizedUrl);
     
     if (bookmark) {
       // Update cache
@@ -102,9 +100,9 @@ async function getBookmarkId(url) {
 // Handle bookmark creation
 chrome.bookmarks.onCreated.addListener(async (id) => {
   try {
-    // Get settings
-    const { settings } = await chrome.storage.sync.get('settings');
-    if (!settings.autoSync) return;
+    // Get autoSync setting from local storage
+    const { autoSync } = await chrome.storage.local.get('autoSync');
+    if (!autoSync) return;
 
     // Get full bookmark details
     const [bookmark] = await chrome.bookmarks.get(id);
@@ -130,24 +128,29 @@ chrome.bookmarks.onCreated.addListener(async (id) => {
       url: bookmark.url,
       title: bookmark.title || bookmark.url,
       description: '',
-      favicon: `https://www.google.com/s2/favicons?domain=${new URL(bookmark.url).hostname}`,
       category,
-      tags: [],
-      source: 'chrome'
+      tags: []
     };
 
-    // Get API URL from settings
-    const { apiUrl } = await chrome.storage.sync.get('apiUrl');
+    // Get API URL and auth token from settings
+    const { apiUrl } = await chrome.storage.local.get('apiUrl');
+    const authToken = await getAuthToken();
+    
     if (!apiUrl) {
       throw new Error('API URL not configured. Please set it in the extension settings.');
     }
+    
+    if (!authToken) {
+      throw new Error('Not authenticated. Please log in to Fuze.');
+    }
 
     // Send to API
-    const response = await fetch(apiUrl, {
+    const response = await fetch(`${apiUrl}/api/bookmarks`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Accept': 'application/json'
+        'Accept': 'application/json',
+        'Authorization': `Bearer ${authToken}`
       },
       body: JSON.stringify(bookmarkData)
     });
@@ -167,28 +170,30 @@ chrome.bookmarks.onCreated.addListener(async (id) => {
     // Show appropriate notification based on whether it was a duplicate
     chrome.notifications.create({
       type: 'basic',
-      iconUrl: '/icons/icon48.png', // Make sure the path is correct
-      title: result.wasDuplicate ? 'Bookmark Updated' : 'Bookmark Synced',
+      iconUrl: '/icons/icon48.png',
+      title: result.wasDuplicate ? 'Bookmark Updated' : 'Bookmark Saved',
       message: result.wasDuplicate 
-        ? `Updated "${bookmarkData.title}" in Bookmark Hub`
-        : `Successfully synced "${bookmarkData.title}"`
+        ? `Updated "${bookmarkData.title}" in Fuze`
+        : `Successfully saved "${bookmarkData.title}" to Fuze`
     });
   } catch (error) {
     console.error('Error syncing bookmark:', error);
-    let errorMessage = 'Failed to sync bookmark';
+    let errorMessage = 'Failed to save bookmark';
     
     if (error.message.includes('API URL not configured')) {
       errorMessage = 'Please configure the API URL in extension settings';
+    } else if (error.message.includes('Not authenticated')) {
+      errorMessage = 'Please log in to Fuze in the extension settings';
     } else if (error.message.includes('Failed to fetch')) {
-      errorMessage = 'Could not connect to the server. Please check your API URL and server status.';
+      errorMessage = 'Could not connect to Fuze. Please check your API URL and server status.';
     } else {
       errorMessage += `: ${error.message}`;
     }
 
     chrome.notifications.create({
       type: 'basic',
-      iconUrl: '/icons/icon48.png', // Make sure the path is correct
-      title: 'Sync Failed',
+      iconUrl: '/icons/icon48.png',
+      title: 'Save Failed',
       message: errorMessage
     });
   }
@@ -197,9 +202,9 @@ chrome.bookmarks.onCreated.addListener(async (id) => {
 // Handle bookmark removal
 chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
   try {
-    // Get settings
-    const { settings } = await chrome.storage.sync.get('settings');
-    if (!settings.autoSync) return;
+    // Get autoSync setting from local storage
+    const { autoSync } = await chrome.storage.local.get('autoSync');
+    if (!autoSync) return;
 
     // Use the removeInfo to get the bookmark details
     if (!removeInfo || !removeInfo.node || !removeInfo.node.url) {
@@ -216,10 +221,16 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
       return;
     }
 
-    // Get API URL from settings
-    const { apiUrl } = await chrome.storage.sync.get('apiUrl');
+    // Get API URL and auth token from settings
+    const { apiUrl } = await chrome.storage.local.get('apiUrl');
+    const authToken = await getAuthToken();
+    
     if (!apiUrl) {
       throw new Error('API URL not configured. Please set it in the extension settings.');
+    }
+    
+    if (!authToken) {
+      throw new Error('Not authenticated. Please log in to Fuze.');
     }
 
     // Get the bookmark ID from the URL
@@ -227,20 +238,21 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
     
     if (!bookmarkId) {
       console.log('Bookmark ID not found for URL:', bookmarkUrl);
-      throw new Error('Bookmark not found in Bookmark Hub');
+      throw new Error('Bookmark not found in Fuze');
     }
     
     console.log('Found bookmark ID for deletion:', bookmarkId);
     
     // Delete by ID endpoint
-    const deleteEndpoint = `${apiUrl}/${bookmarkId}`;
+    const deleteEndpoint = `${apiUrl}/api/bookmarks/${bookmarkId}`;
     
     // Send delete request to API
     const response = await fetch(deleteEndpoint, {
       method: 'DELETE',
       headers: {
         'Content-Type': 'application/json',
-        'Accept': 'application/json'
+        'Accept': 'application/json',
+        'Authorization': `Bearer ${authToken}`
       }
     });
 
@@ -250,13 +262,14 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
       
       const normalizedUrl = normalizeUrl(bookmarkUrl);
       const encodedUrl = encodeURIComponent(normalizedUrl);
-      const urlDeleteEndpoint = `${apiUrl}/url/${encodedUrl}`;
+      const urlDeleteEndpoint = `${apiUrl}/api/bookmarks/url/${encodedUrl}`;
       
       const urlResponse = await fetch(urlDeleteEndpoint, {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',
-          'Accept': 'application/json'
+          'Accept': 'application/json',
+          'Authorization': `Bearer ${authToken}`
         }
       });
       
@@ -273,36 +286,36 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
       bookmarkCache.delete(normalizedUrl);
     }
 
-    console.log('Bookmark removed from hub successfully');
+    console.log('Bookmark removed from Fuze successfully');
 
     // Show success notification
     chrome.notifications.create({
       type: 'basic',
-      iconUrl: '/icons/icon48.png', // Make sure the path is correct
+      iconUrl: '/icons/icon48.png',
       title: 'Bookmark Removed',
-      message: `Successfully removed bookmark from Bookmark Hub`
+      message: `Successfully removed bookmark from Fuze`
     });
   } catch (error) {
-    console.error('Error removing bookmark from hub:', {
+    console.error('Error removing bookmark from Fuze:', {
       error: error.message,
       bookmarkUrl: removeInfo?.node?.url,
       normalizedUrl: removeInfo?.node?.url ? normalizeUrl(removeInfo.node.url) : null,
-      apiUrl: await chrome.storage.sync.get('apiUrl').then(data => data.apiUrl)
+      apiUrl: await chrome.storage.local.get('apiUrl').then(data => data.apiUrl)
     });
 
     // Show error notification
     chrome.notifications.create({
       type: 'basic',
-      iconUrl: '/icons/icon48.png', // Make sure the path is correct
+      iconUrl: '/icons/icon48.png',
       title: 'Remove Failed',
-      message: 'Failed to remove bookmark from Bookmark Hub'
+      message: 'Failed to remove bookmark from Fuze'
     });
   }
 });
 
 // Handle context menu clicks
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId === 'save-to-bookmark-hub') {
+  if (info.menuItemId === 'save-to-fuze') {
     const url = info.linkUrl || info.pageUrl;
     const title = tab.title || '';
     
@@ -311,7 +324,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       chrome.notifications.create({
         type: 'basic',
         iconUrl: '/icons/icon48.png',
-        title: 'Bookmark Hub',
+        title: 'Fuze',
         message: 'Cannot save Chrome internal pages'
       });
       return;
@@ -323,20 +336,20 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       chrome.notifications.create({
         type: 'basic',
         iconUrl: '/icons/icon48.png',
-        title: 'Bookmark Hub',
+        title: 'Fuze',
         message: 'Bookmark saved successfully!'
       });
       
       // Update cache with bookmark ID
-      if (saved && saved.id) {
-        bookmarkCache.set(normalizeUrl(url), saved.id);
+      if (saved && saved.bookmark && saved.bookmark.id) {
+        bookmarkCache.set(normalizeUrl(url), saved.bookmark.id);
       }
     } catch (error) {
       console.error('Error saving bookmark:', error);
       chrome.notifications.create({
         type: 'basic',
         iconUrl: '/icons/icon48.png',
-        title: 'Bookmark Hub Error',
+        title: 'Fuze Error',
         message: error.message || 'Failed to save bookmark'
       });
     }

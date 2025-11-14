@@ -1,16 +1,34 @@
 // Add processBookmarkFromExtension directly here
-async function processBookmarkFromExtension({ title, url }) {
-  // You can expand this logic as needed, but for now just send to API
-  const apiUrl = await new Promise(resolve => {
-    chrome.storage.sync.get(['apiUrl'], data => resolve(data.apiUrl));
-  });
-  const bookmarkData = { title, url };
-  const response = await fetch(apiUrl, {
+async function processBookmarkFromExtension({ title, url, description = '', category = 'other', tags = '' }) {
+  const { apiUrl } = await chrome.storage.local.get('apiUrl');
+  const authToken = await chrome.storage.local.get('authToken').then(data => data.authToken);
+  
+  if (!authToken) {
+    throw new Error('Not authenticated. Please log in to Fuze.');
+  }
+  
+  const bookmarkData = { 
+    title, 
+    url, 
+    description,
+    category,
+    tags: tags.split(',').map(tag => tag.trim()).filter(tag => tag)
+  };
+  
+  const response = await fetch(`${apiUrl}/api/bookmarks`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${authToken}`
+    },
     body: JSON.stringify(bookmarkData)
   });
-  if (!response.ok) throw new Error('Failed to save bookmark');
+  
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    throw new Error(errorData.message || 'Failed to save bookmark');
+  }
+  
   return await response.json();
 }
 
@@ -20,6 +38,7 @@ document.addEventListener('DOMContentLoaded', function() {
   const settingsLink = document.getElementById('settings-link');
   const backButton = document.getElementById('back-button');
   const saveSettingsButton = document.getElementById('save-settings');
+  const loginButton = document.getElementById('login-btn');
   const mainForm = document.getElementById('main-form');
   const settingsForm = document.getElementById('settings-form');
   const connectionStatus = document.getElementById('connection-status');
@@ -33,15 +52,17 @@ document.addEventListener('DOMContentLoaded', function() {
   });
   
   // Load settings and update connection status
-  chrome.storage.sync.get(['apiUrl', 'apiKey', 'autoSync'], function(data) {
+  chrome.storage.local.get(['apiUrl', 'authToken', 'autoSync'], function(data) {
     if (data.apiUrl) {
       document.getElementById('api-url').value = data.apiUrl;
-      connectionStatus.textContent = 'Connected';
-      connectionStatus.style.color = '#047857';
     }
     
-    if (data.apiKey) {
-      document.getElementById('api-key').value = data.apiKey;
+    if (data.authToken) {
+      connectionStatus.textContent = 'Connected to Fuze';
+      connectionStatus.style.color = '#047857';
+    } else {
+      connectionStatus.textContent = 'Not authenticated';
+      connectionStatus.style.color = '#dc2626';
     }
     
     // Set auto-sync checkbox state
@@ -61,12 +82,64 @@ document.addEventListener('DOMContentLoaded', function() {
     mainForm.style.display = 'block';
   });
   
+  // Login to Fuze
+  loginButton.addEventListener('click', async function(e) {
+    e.preventDefault();
+    
+    const apiUrl = document.getElementById('api-url').value.trim();
+    const email = document.getElementById('email').value.trim();
+    const password = document.getElementById('password').value;
+    
+    if (!apiUrl || !email || !password) {
+      alert('Please fill in all fields');
+      return;
+    }
+    
+    try {
+      loginButton.disabled = true;
+      loginButton.textContent = 'Logging in...';
+      
+      const response = await fetch(`${apiUrl}/api/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ email, password })
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.message || 'Login failed');
+      }
+      
+      const data = await response.json();
+      
+      // Store auth token and settings
+      await chrome.storage.local.set({ authToken: data.access_token });
+      await chrome.storage.local.set({ apiUrl: apiUrl });
+      
+      connectionStatus.textContent = 'Connected to Fuze';
+      connectionStatus.style.color = '#047857';
+      
+      showStatus('Successfully logged in to Fuze!', 'success');
+      
+      // Clear password field
+      document.getElementById('password').value = '';
+      
+    } catch (error) {
+      console.error('Login error:', error);
+      showStatus('Login failed: ' + error.message, 'error');
+    } finally {
+      loginButton.disabled = false;
+      loginButton.textContent = 'Login to Fuze';
+    }
+  });
+  
   // Save settings
   saveSettingsButton.addEventListener('click', function(e) {
     e.preventDefault();
     
     const apiUrl = document.getElementById('api-url').value.trim();
-    const apiKey = document.getElementById('api-key').value.trim();
     const autoSync = autoSyncCheckbox.checked;
     
     if (!apiUrl) {
@@ -74,23 +147,17 @@ document.addEventListener('DOMContentLoaded', function() {
       return;
     }
     
-    chrome.storage.sync.set({
+    chrome.storage.local.set({
       apiUrl: apiUrl,
-      apiKey: apiKey,
       autoSync: autoSync
     }, function() {
-      settingsForm.style.display = 'none';
-      mainForm.style.display = 'block';
-      connectionStatus.textContent = 'Connected';
-      connectionStatus.style.color = '#047857';
-      
       showStatus('Settings saved successfully', 'success');
     });
   });
   
-  // Add this function at the top level
+  // Test server connection
   async function testServerConnection(apiUrl) {
-    const baseUrl = apiUrl.replace('/api/bookmarks', '');
+    const baseUrl = apiUrl.replace('/api', '');
     console.log('Testing connection to:', baseUrl);
     
     try {
@@ -118,24 +185,39 @@ document.addEventListener('DOMContentLoaded', function() {
   form.addEventListener('submit', async function(e) {
     e.preventDefault();
     
-    chrome.storage.sync.get(['apiUrl', 'apiKey'], async function(data) {
+    chrome.storage.local.get(['apiUrl', 'authToken'], async function(data) {
       if (!data.apiUrl) {
         showStatus('Please configure API URL in settings', 'error');
+        return;
+      }
+      
+      if (!data.authToken) {
+        showStatus('Please log in to Fuze in settings', 'error');
         return;
       }
       
       // Test server connection first
       const isConnected = await testServerConnection(data.apiUrl);
       if (!isConnected) {
-        showStatus('Could not connect to server. Please check if the server is running and the API URL is correct.', 'error');
+        showStatus('Could not connect to Fuze. Please check if the server is running and the API URL is correct.', 'error');
         return;
       }
       
       const url = document.getElementById('url').value;
       const title = document.getElementById('title').value;
+      const description = document.getElementById('description').value;
+      const category = document.getElementById('category').value;
+      const tags = document.getElementById('tags').value;
       
       try {
-        const saved = await processBookmarkFromExtension({ title, url });
+        const saved = await processBookmarkFromExtension({ 
+          title, 
+          url, 
+          description, 
+          category, 
+          tags 
+        });
+        
         showStatus('Bookmark saved successfully!', 'success');
         
         // Clear form fields except URL (which is readonly)
@@ -147,7 +229,9 @@ document.addEventListener('DOMContentLoaded', function() {
         let errorMessage = 'Error saving bookmark. ';
         
         if (error.message.includes('Failed to fetch')) {
-          errorMessage += 'Could not connect to the server. Please check if the server is running and the API URL is correct.';
+          errorMessage += 'Could not connect to Fuze. Please check if the server is running and the API URL is correct.';
+        } else if (error.message.includes('Not authenticated')) {
+          errorMessage = 'Please log in to Fuze in the settings.';
         } else if (error.message.includes('already exists')) {
           errorMessage = 'This URL is already bookmarked.';
         } else {
@@ -197,22 +281,41 @@ document.addEventListener('DOMContentLoaded', function() {
   document.getElementById('import-bookmarks').addEventListener('click', async () => {
     const importButton = document.getElementById('import-bookmarks');
     const originalText = importButton.textContent;
+    
     try {
+      const { apiUrl, authToken } = await chrome.storage.local.get(['apiUrl', 'authToken']);
+      
+      if (!apiUrl) {
+        alert('Please configure API URL in settings');
+        return;
+      }
+      
+      if (!authToken) {
+        alert('Please log in to Fuze first');
+        return;
+      }
+      
       importButton.disabled = true;
       importButton.textContent = 'Importing...';
-      const apiUrl = 'http://localhost:3000/api/bookmarks/import';
+      
       const bookmarks = await getAllBookmarks();
-      const response = await fetch(apiUrl, {
+      const response = await fetch(`${apiUrl}/api/bookmarks/import`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
         body: JSON.stringify(bookmarks)
       });
+      
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.message || `Failed to import bookmarks: ${response.status}`);
       }
+      
       const result = await response.json();
       alert(`Import successful!\nImported: ${result.added} bookmarks\nUpdated: ${result.updated} bookmarks`);
+      
     } catch (err) {
       alert('Error importing bookmarks: ' + err.message);
     } finally {

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Bookmark Hub Connector",
+  "name": "Fuze Web Clipper",
   "version": "1.0",
-  "description": "Connects your Chrome bookmarks with Bookmark Hub",
+  "description": "Save and organize web content with Fuze - your intelligent bookmark manager",
   "permissions": [
     "bookmarks",
     "storage",
@@ -12,7 +12,10 @@
     "contextMenus"
   ],
   "host_permissions": [
-    "http://localhost:3000/*"
+    "http://localhost:5000/*",
+    "https://localhost:5000/*",
+    "http://127.0.0.1:5000/*",
+    "https://127.0.0.1:5000/*"
   ],
   "action": {
     "default_popup": "popup/popup.html",
