@@ -6,6 +6,46 @@ const DEFAULT_SETTINGS = {
   theme: 'light'
 };
 
+// Handle messages from content script and popup
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  console.log('Background: Received message:', request.action, 'from:', sender.url);
+  switch (request.action) {
+    case 'syncAuthToken':
+      // Sync auth token from Fuze platform to extension
+      console.log('Background: Syncing auth token from Fuze platform, token length:', request.token ? request.token.length : 0);
+      chrome.storage.local.set({
+        authToken: request.token,
+        apiUrl: 'https://fuze-backend.onrender.com'
+      }, () => {
+        console.log('Background: Auth token synced successfully');
+
+        // Notify all extension contexts (popup, etc.) to update status
+        chrome.runtime.sendMessage({
+          action: 'authStatusChanged',
+          authenticated: true
+        }).catch(() => {
+          // Popup might not be open, that's OK
+          console.log('Background: No popup to notify');
+        });
+      });
+      break;
+
+    case 'clearAuthToken':
+      // Clear auth token (user logged out)
+      console.log('Background: Clearing auth token due to logout');
+      chrome.storage.local.remove('authToken', () => {
+        console.log('Background: Auth token cleared');
+
+        // Notify popup to update status
+        chrome.runtime.sendMessage({
+          action: 'authStatusChanged',
+          authenticated: false
+        });
+      });
+      break;
+  }
+});
+
 // Initialize 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.local.get('autoSync', (data) => {

@@ -43,6 +43,10 @@ document.addEventListener('DOMContentLoaded', function() {
   const settingsForm = document.getElementById('settings-form');
   const connectionStatus = document.getElementById('connection-status');
   const autoSyncCheckbox = document.getElementById('auto-sync');
+  const authPrompt = document.getElementById('auth-prompt');
+  const loginRedirectBtn = document.getElementById('login-redirect-btn');
+  const signupRedirectBtn = document.getElementById('signup-redirect-btn');
+  const extensionSettingsLink = document.getElementById('extension-settings-link');
   
   // Get current tab URL and title
   chrome.tabs.query({active: true, currentWindow: true}, function(tabs) {
@@ -56,18 +60,129 @@ document.addEventListener('DOMContentLoaded', function() {
     if (data.apiUrl) {
       document.getElementById('api-url').value = data.apiUrl;
     }
-    
-    if (data.authToken) {
-      connectionStatus.textContent = 'Connected to Fuze';
-      connectionStatus.style.color = '#047857';
-    } else {
-      connectionStatus.textContent = 'Not authenticated';
-      connectionStatus.style.color = '#dc2626';
-    }
-    
+
     // Set auto-sync checkbox state
     autoSyncCheckbox.checked = !!data.autoSync;
+
+    // Validate authentication status
+    validateAuthentication(data.authToken, data.apiUrl);
   });
+
+  // Function to validate authentication status
+  async function validateAuthentication(authToken, apiUrl) {
+    if (!apiUrl) {
+      showAuthStatus('API URL not configured', '#dc2626', 'settings');
+      return;
+    }
+
+    if (!authToken) {
+      showAuthStatus('Not connected to Fuze', '#dc2626', 'login');
+      return;
+    }
+
+    try {
+      // Test the auth token by making a simple API call
+      const response = await fetch(`${apiUrl}/api/auth/verify`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${authToken}`,
+          'Accept': 'application/json'
+        }
+      });
+
+      if (response.ok) {
+        showAuthStatus('Connected to Fuze', '#047857', 'connected');
+      } else {
+        // Token is invalid/expired, clear it
+        await chrome.storage.local.remove('authToken');
+        showAuthStatus('Session expired - please login', '#dc2626', 'login');
+      }
+    } catch (error) {
+      console.error('Auth validation error:', error);
+      // If we can't reach the server, assume token is still valid (offline mode)
+      showAuthStatus('Connected to Fuze (offline)', '#f59e0b', 'connected');
+    }
+  }
+
+  // Function to show authentication status with appropriate actions
+  function showAuthStatus(message, color, status) {
+    const connectionStatus = document.getElementById('connection-status');
+    connectionStatus.textContent = message;
+    connectionStatus.style.color = color;
+
+    // Remove any existing click handlers
+    connectionStatus.onclick = null;
+    connectionStatus.style.cursor = 'default';
+    connectionStatus.style.textDecoration = 'none';
+
+    // Show/hide auth prompt overlay
+    if (status === 'login') {
+      authPrompt.style.display = 'flex';
+      connectionStatus.style.cursor = 'pointer';
+      connectionStatus.style.textDecoration = 'underline';
+      connectionStatus.onclick = () => redirectToFuzeLogin();
+    } else {
+      authPrompt.style.display = 'none';
+      if (status === 'settings') {
+        connectionStatus.style.cursor = 'pointer';
+        connectionStatus.style.textDecoration = 'underline';
+        connectionStatus.onclick = () => {
+          mainForm.style.display = 'none';
+          settingsForm.style.display = 'block';
+        };
+      }
+    }
+  }
+
+  // Function to redirect to Fuze login page
+  function redirectToFuzeLogin() {
+    // Open Fuze login page in a new tab (localhost for development)
+    chrome.tabs.create({
+      url: 'http://localhost:5173/login',
+      active: true
+    });
+
+    // Close the extension popup
+    window.close();
+  }
+
+  // Listen for auth status changes from background script
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === 'authStatusChanged') {
+      console.log('Popup: Auth status changed, revalidating...');
+      // Re-check authentication status when it changes
+      chrome.storage.local.get(['authToken', 'apiUrl'], function(data) {
+        validateAuthentication(data.authToken, data.apiUrl);
+      });
+    }
+  });
+
+  // Auth prompt button handlers
+  loginRedirectBtn.addEventListener('click', function(e) {
+    e.preventDefault();
+    redirectToFuzeLogin();
+  });
+
+  signupRedirectBtn.addEventListener('click', function(e) {
+    e.preventDefault();
+    redirectToFuzeSignup();
+  });
+
+  extensionSettingsLink.addEventListener('click', function(e) {
+    e.preventDefault();
+    authPrompt.style.display = 'none';
+    mainForm.style.display = 'none';
+    settingsForm.style.display = 'block';
+  });
+
+  // Function to redirect to Fuze signup page
+  function redirectToFuzeSignup() {
+    chrome.tabs.create({
+      url: 'http://localhost:5173/signup',
+      active: true
+    });
+    window.close();
+  }
   
   // Toggle between main form and settings
   settingsLink.addEventListener('click', function(e) {
@@ -281,44 +396,85 @@ document.addEventListener('DOMContentLoaded', function() {
   document.getElementById('import-bookmarks').addEventListener('click', async () => {
     const importButton = document.getElementById('import-bookmarks');
     const originalText = importButton.textContent;
-    
+
     try {
       const { apiUrl, authToken } = await chrome.storage.local.get(['apiUrl', 'authToken']);
-      
+
       if (!apiUrl) {
         alert('Please configure API URL in settings');
         return;
       }
-      
+
       if (!authToken) {
         alert('Please log in to Fuze first');
         return;
       }
-      
+
       importButton.disabled = true;
-      importButton.textContent = 'Importing...';
-      
+      importButton.textContent = 'Starting import...';
+
       const bookmarks = await getAllBookmarks();
-      const response = await fetch(`${apiUrl}/api/bookmarks/import`, {
+
+      // Start the import
+      const importResponse = await fetch(`${apiUrl}/api/bookmarks/import`, {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${authToken}`
         },
         body: JSON.stringify(bookmarks)
       });
-      
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.message || `Failed to import bookmarks: ${response.status}`);
+
+      if (!importResponse.ok) {
+        const errorData = await importResponse.json();
+        throw new Error(errorData.message || `Failed to start import: ${importResponse.status}`);
       }
-      
-      const result = await response.json();
-      alert(`Import successful!\nImported: ${result.added} bookmarks\nUpdated: ${result.updated} bookmarks`);
-      
+
+      // Poll for progress
+      let progressInterval = setInterval(async () => {
+        try {
+          const progressResponse = await fetch(`${apiUrl}/api/bookmarks/import/progress`, {
+            headers: {
+              'Authorization': `Bearer ${authToken}`
+            }
+          });
+
+          if (progressResponse.ok) {
+            const progress = await progressResponse.json();
+
+            if (progress.status === 'processing') {
+              const percent = Math.round((progress.processed / progress.total) * 100);
+              importButton.textContent = `Importing... ${progress.processed}/${progress.total} (${percent}%)`;
+            } else if (progress.status === 'completed') {
+              clearInterval(progressInterval);
+              importButton.textContent = 'Import completed!';
+              setTimeout(() => {
+                alert(`Import successful!\nTotal: ${progress.total}\nAdded: ${progress.added}\nSkipped: ${progress.skipped}\nErrors: ${progress.errors}`);
+              }, 500);
+            }
+          }
+        } catch (progressError) {
+          console.error('Error checking progress:', progressError);
+        }
+      }, 2000); // Check every 2 seconds
+
+      // Also wait for the initial response
+      const result = await importResponse.json();
+      console.log('Import started:', result);
+
+      // Clear interval after 5 minutes as safety measure
+      setTimeout(() => {
+        clearInterval(progressInterval);
+        if (importButton.disabled) {
+          importButton.disabled = false;
+          importButton.textContent = originalText;
+          alert('Import may have completed. Please refresh to check status.');
+        }
+      }, 300000); // 5 minutes
+
     } catch (err) {
+      console.error('Import error:', err);
       alert('Error importing bookmarks: ' + err.message);
-    } finally {
       importButton.disabled = false;
       importButton.textContent = originalText;
     }

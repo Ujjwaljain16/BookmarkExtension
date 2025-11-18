@@ -1,14 +1,25 @@
 <!DOCTYPE html>
 <html>
 <head>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
 <link rel="stylesheet" type="text/css" href="popup.css">
   <title>Fuze Web Clipper</title>
   <meta charset="utf-8">
 </head>
 <body>
   <div class="header">
-    <svg class="logo" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+    <svg class="logo" width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <!-- Lightning bolt icon matching Fuze favicon -->
+      <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="url(#fuzeGradient)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" fill="url(#fuzeGradient)"/>
+      <defs>
+        <linearGradient id="fuzeGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" style="stop-color:#4DD0E1;stop-opacity:1" />
+          <stop offset="50%" style="stop-color:#5C6BC0;stop-opacity:1" />
+          <stop offset="100%" style="stop-color:#9C27B0;stop-opacity:1" />
+        </linearGradient>
+      </defs>
     </svg>
     <h1>Fuze Web Clipper</h1>
   </div>
@@ -56,12 +67,29 @@
       <span id="connection-status">Not connected</span>
       <a href="#" id="settings-link" class="settings-link">Settings</a>
     </div>
+
+    <!-- Auth prompt overlay (shown when not authenticated) -->
+    <div id="auth-prompt" class="auth-prompt" style="display: none;">
+      <div class="auth-prompt-content">
+        <div class="auth-prompt-header">
+          <h3>🔗 Connect to Fuze</h3>
+          <p>Login to your Fuze account to save bookmarks</p>
+        </div>
+        <div class="auth-prompt-actions">
+          <button id="login-redirect-btn" class="btn">Login to Fuze</button>
+          <button id="signup-redirect-btn" class="btn-secondary">Sign Up</button>
+        </div>
+        <div class="auth-prompt-footer">
+          <a href="#" id="extension-settings-link">Extension Settings</a>
+        </div>
+      </div>
+    </div>
   </div>
   
   <div id="settings-form" style="display: none;">
     <div class="form-group">
       <label for="api-url">Fuze API URL</label>
-      <input type="url" id="api-url" placeholder="http://localhost:5000">
+      <input type="url" id="api-url" placeholder="https://fuze-backend.onrender.com">
     </div>
     
     <div class="form-group">
