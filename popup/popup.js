@@ -1,5 +1,5 @@
 // Add processBookmarkFromExtension directly here
-async function processBookmarkFromExtension({ title, url, description = '', category = 'other', tags = '' }) {
+async function processBookmarkFromExtension({ title, url, description = '', tags = '' }) {
   const { apiUrl } = await chrome.storage.local.get('apiUrl');
   const authToken = await chrome.storage.local.get('authToken').then(data => data.authToken);
   
@@ -11,7 +11,6 @@ async function processBookmarkFromExtension({ title, url, description = '', cate
     title, 
     url, 
     description,
-    category,
     tags: tags.split(',').map(tag => tag.trim()).filter(tag => tag)
   };
   
@@ -365,7 +364,6 @@ document.addEventListener('DOMContentLoaded', function() {
       const url = document.getElementById('url').value;
       const title = document.getElementById('title').value;
       const description = document.getElementById('description').value;
-      const category = document.getElementById('category').value;
       const tags = document.getElementById('tags').value;
       
       try {
@@ -373,7 +371,6 @@ document.addEventListener('DOMContentLoaded', function() {
           title, 
           url, 
           description, 
-          category, 
           tags 
         });
         
@@ -382,7 +379,6 @@ document.addEventListener('DOMContentLoaded', function() {
         // Clear form fields except URL (which is readonly)
         document.getElementById('description').value = '';
         document.getElementById('tags').value = '';
-        document.getElementById('category').value = 'other';
       } catch (error) {
         console.error('Error details:', error);
         let errorMessage = 'Error saving bookmark. ';

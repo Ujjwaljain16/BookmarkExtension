@@ -39,7 +39,7 @@ h1 {
   margin: 0;
   color: #fff;
   font-weight: 700;
-  background: linear-gradient(to right, #4DD0E1, #5C6BC0, #9C27B0);
+  background: linear-gradient(to right, #4DD0E1, #14B8A6, #10B981);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -81,7 +81,7 @@ textarea {
   min-height: 60px;
 }
 .btn {
-  background: linear-gradient(to right, #4DD0E1, #5C6BC0, #9C27B0);
+  background: linear-gradient(to right, #4DD0E1, #14B8A6, #10B981);
   color: white;
   border: none;
   padding: 1rem 2.5rem;
@@ -107,7 +107,7 @@ textarea {
   transition: left 0.5s;
 }
 .btn:hover {
-  background: linear-gradient(to right, #9C27B0, #5C6BC0, #4DD0E1);
+  background: linear-gradient(to right, #10B981, #14B8A6, #4DD0E1);
   box-shadow: 0 8px 32px 0 rgba(77, 208, 225, 0.18);
   transform: translateY(-2px) scale(1.04);
 }
@@ -121,7 +121,7 @@ textarea {
   box-shadow: none;
 }
 .btn-secondary {
-  background: linear-gradient(to right, #5C6BC0, #9C27B0);
+  background: linear-gradient(to right, #14B8A6, #10B981);
   color: #fff;
   border: none;
   padding: 1rem 2.5rem;
@@ -134,7 +134,7 @@ textarea {
   box-shadow: 0 4px 24px 0 rgba(156, 39, 176, 0.10);
 }
 .btn-secondary:hover {
-  background: linear-gradient(to right, #4DD0E1, #5C6BC0);
+  background: linear-gradient(to right, #4DD0E1, #14B8A6);
   box-shadow: 0 8px 32px 0 rgba(77, 208, 225, 0.18);
   transform: translateY(-2px) scale(1.04);
 }
@@ -185,7 +185,7 @@ textarea {
   transition: color 0.2s ease;
 }
 .settings-link:hover {
-  color: #5C6BC0;
+  color: #14B8A6;
   text-decoration: underline;
 }
 .toggle-container {
@@ -234,7 +234,7 @@ textarea {
   width: 18px;
   left: 2px;
   bottom: 2px;
-  background: linear-gradient(to right, #4DD0E1, #5C6BC0, #9C27B0);
+  background: linear-gradient(to right, #4DD0E1, #14B8A6, #10B981);
   transition: all 0.3s ease;
   border-radius: 50%;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
@@ -245,7 +245,7 @@ input:checked + .slider {
 }
 input:checked + .slider:before {
   transform: translateX(20px);
-  background: linear-gradient(to right, #4DD0E1, #5C6BC0, #9C27B0);
+  background: linear-gradient(to right, #4DD0E1, #14B8A6, #10B981);
   box-shadow: 0 2px 8px rgba(77, 208, 225, 0.4);
 }
 
@@ -308,7 +308,7 @@ input:checked + .slider:before {
 }
 
 .auth-prompt-footer a {
-  color: #5C6BC0;
+  color: #14B8A6;
   text-decoration: none;
   font-size: 0.75rem;
   font-weight: 600;
