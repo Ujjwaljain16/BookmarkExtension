@@ -19,9 +19,9 @@ A powerful Chrome extension that integrates with your Fuze backend to save, orga
 
 For production use, the extension is configured to work with:
 - **Frontend**: https://itsfuze.vercel.app/
-- **Backend**: https://fuze-backend.onrender.com/
+- **Backend**: https://Ujjwaljain16-fuze-backend.hf.space/
 
-The extension will automatically use these production URLs when installed from the Chrome Web Store.
+The extension will automatically use these production URLs by default.
 
 ### Development Setup
 
@@ -36,7 +36,7 @@ For local development:
 
 1. Click on the Fuze Web Clipper extension icon in your Chrome toolbar
 2. Click "Settings" in the popup
-3. Enter your Fuze API URL (default: `https://fuze-backend.onrender.com`)
+3. Enter your Fuze API URL (default: `https://Ujjwaljain16-fuze-backend.hf.space`)
 4. Enter your Fuze email and password
 5. Click "Login to Fuze"
 6. Enable "Auto-sync Chrome bookmarks" if desired
@@ -89,7 +89,7 @@ The extension communicates with your Fuze backend through the following endpoint
 
 ### Extension Settings
 
-- **API URL**: Your Fuze backend URL (e.g., `http://localhost:5000`)
+- **API URL**: Your Fuze backend URL (default: `https://Ujjwaljain16-fuze-backend.hf.space` for production, `http://localhost:5000` for development)
 - **Email**: Your Fuze account email
 - **Password**: Your Fuze account password
 - **Auto-sync**: Enable/disable automatic Chrome bookmark sync

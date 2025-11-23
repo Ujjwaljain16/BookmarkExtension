@@ -61,12 +61,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // Load settings and update connection status
   chrome.storage.local.get(['apiUrl', 'authToken', 'autoSync'], function(data) {
-    // Default to localhost for development if no API URL is set
-    const defaultApiUrl = 'http://localhost:5000';
+    // Default to production API URL
+    const defaultApiUrl = 'https://Ujjwaljain16-fuze-backend.hf.space';
     if (data.apiUrl) {
       document.getElementById('api-url').value = data.apiUrl;
     } else {
-      // Set default localhost URL if none exists
+      // Set default production URL
       document.getElementById('api-url').value = defaultApiUrl;
       chrome.storage.local.set({ apiUrl: defaultApiUrl });
     }
@@ -75,7 +75,7 @@ document.addEventListener('DOMContentLoaded', function() {
     autoSyncCheckbox.checked = !!data.autoSync;
 
     // Validate authentication status (use default if no API URL)
-    const apiUrl = data.apiUrl || 'http://localhost:5000';
+    const apiUrl = data.apiUrl || 'https://Ujjwaljain16-fuze-backend.hf.space';
     validateAuthentication(data.authToken, apiUrl);
   });
 
@@ -159,9 +159,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // Function to redirect to Fuze login page
   function redirectToFuzeLogin() {
-    // Open Fuze login page in a new tab (localhost for development)
+    // Open Fuze login page in a new tab
     chrome.tabs.create({
-      url: 'http://localhost:5173/login',
+      url: 'https://itsfuze.vercel.app/login',
       active: true
     });
 
@@ -221,7 +221,7 @@ document.addEventListener('DOMContentLoaded', function() {
   // Function to redirect to Fuze signup page
   function redirectToFuzeSignup() {
     chrome.tabs.create({
-      url: 'http://localhost:5173/signup',
+      url: 'https://itsfuze.vercel.app/signup',
       active: true
     });
     window.close();

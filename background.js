@@ -22,27 +22,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         
         // Get existing API URL to preserve it, or use smart default
         chrome.storage.local.get(['apiUrl'], (existingData) => {
-          // Smart default: detect environment and use appropriate API URL
+          // Smart default: use production API URL
           // Supports both development (localhost) and production
-          let defaultApiUrl = 'http://localhost:5000'; // Development default
+          let defaultApiUrl = 'https://Ujjwaljain16-fuze-backend.hf.space'; // Production default
           try {
             // Try to detect if we're in development or production
             // Check if we're on localhost or if manifest indicates production
             if (chrome.runtime.getManifest && chrome.runtime.getManifest().homepage_url) {
               const homepage = chrome.runtime.getManifest().homepage_url;
               const url = new URL(homepage);
-              // If homepage is not localhost, use production API
-              if (!url.hostname.includes('localhost') && !url.hostname.includes('127.0.0.1')) {
-                defaultApiUrl = url.origin.replace('www.', 'api.').replace('itsfuze', 'api.itsfuze');
-                // Fallback to known production URL if replacement doesn't work
-                if (defaultApiUrl === url.origin) {
-                  defaultApiUrl = 'https://api.itsfuze.vercel.app';
-                }
+              // If homepage is localhost, use localhost API
+              if (url.hostname.includes('localhost') || url.hostname.includes('127.0.0.1')) {
+                defaultApiUrl = 'http://localhost:5000'; // Development
               }
             }
           } catch (e) {
-            // Fallback: keep localhost for dev, but log
-            console.log('Using default development API URL (localhost:5000)');
+            // Fallback: use production URL
+            console.log('Using default production API URL');
           }
           const apiUrl = existingData.apiUrl || defaultApiUrl;
           
