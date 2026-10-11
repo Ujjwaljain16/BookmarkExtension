@@ -29,6 +29,7 @@ function loadBridge({ origin = 'https://itsfuze.vercel.app', top = true, user = 
     setInterval: (fn) => { intervals.push(fn); return intervals.length; },
     clearInterval: () => {},
     JSON,
+    atob,
   };
   vm.runInNewContext(source, sandbox);
   return {
@@ -38,11 +39,17 @@ function loadBridge({ origin = 'https://itsfuze.vercel.app', top = true, user = 
   };
 }
 
-const USER = { id: 1, access_token: 'access-1', refresh_token: 'refresh-1' };
+function jwt(claims) {
+  const enc = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  return `${enc({ alg: 'HS256' })}.${enc(claims)}.sig`;
+}
+const REFRESH_1 = jwt({ sub: '7', jti: '1' });
+const REFRESH_2 = jwt({ sub: '7', jti: '2' });
+const USER = { id: 7, access_token: 'access-1', refresh_token: REFRESH_1 };
 
 test('reports a signed-in session on load', () => {
   const page = loadBridge({ user: USER });
-  assert.deepEqual(page.sent, [{ action: 'webSession', accessToken: 'access-1', refreshToken: 'refresh-1' }]);
+  assert.deepEqual(page.sent, [{ action: 'webSession', accessToken: 'access-1', refreshToken: REFRESH_1 }]);
 });
 
 test('says nothing on a page that was never signed in', () => {
@@ -56,13 +63,13 @@ test('reports sign-in, token rotation and sign-out as they happen, once each', (
   page.setUser(USER);
   page.tick();
   page.tick();
-  page.setUser({ ...USER, access_token: 'access-2', refresh_token: 'refresh-2' });
+  page.setUser({ ...USER, access_token: 'access-2', refresh_token: REFRESH_2 });
   page.tick();
   page.setUser(null);
   page.tick();
   page.tick();
-  assert.deepEqual(page.sent.map((m) => [m.action, m.refreshToken]), [
-    ['webSession', 'refresh-1'], ['webSession', 'refresh-2'], ['webSignedOut', undefined],
+  assert.deepEqual(page.sent.map((m) => [m.action, m.refreshToken || m.userId]), [
+    ['webSession', REFRESH_1], ['webSession', REFRESH_2], ['webSignedOut', '7'],
   ]);
 });
 

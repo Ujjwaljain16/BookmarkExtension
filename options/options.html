@@ -9,6 +9,29 @@
   <main>
     <h1>Fuze Web Clipper</h1>
 
+    <section id="account-section">
+      <h2>Account</h2>
+      <p id="account-status" class="hint">Checking...</p>
+      <form id="signin-form" hidden>
+        <p class="hint">Signing in on the Fuze website signs the extension in as well. Or sign in here:</p>
+        <label for="email">Email</label>
+        <input type="email" id="email" autocomplete="username" required>
+        <label for="password">Password</label>
+        <input type="password" id="password" autocomplete="current-password" required>
+        <div class="row"><button type="submit" id="signin-btn">Sign in</button></div>
+      </form>
+      <div class="row" id="signout-row" hidden><button type="button" id="signout-btn" class="secondary">Sign out</button></div>
+      <p id="account-msg" class="status" role="status"></p>
+    </section>
+
+    <section id="sync-section">
+      <h2>Chrome bookmarks</h2>
+      <label class="check"><input type="checkbox" id="auto-sync">
+        <span>Save new Chrome bookmarks to Fuze, and remove them from Fuze when deleted in Chrome.</span></label>
+      <div class="row"><button type="button" id="import-btn">Import all Chrome bookmarks</button></div>
+      <p id="import-status" class="status" role="status"></p>
+    </section>
+
     <section id="server-section">
       <h2>API server</h2>
       <p class="hint">Leave empty to use Fuze (<span id="default-api"></span>). Point it at another server only if you

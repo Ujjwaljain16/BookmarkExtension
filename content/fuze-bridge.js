@@ -45,15 +45,33 @@
     }
   }
 
+  // Which account a token is for (the JWT "sub" claim), so a sign-out only ends that account's
+  // session in the extension. Not verified: the extension never trusts it for anything else.
+  function userIdOf(token) {
+    try {
+      const part = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+      const sub = JSON.parse(atob(part.padEnd(Math.ceil(part.length / 4) * 4, '='))).sub;
+      return sub == null ? null : String(sub);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  let lastUserId = null;
+
   function check() {
     const session = readSession();
     const key = session ? session.refreshToken || session.accessToken : '';
     if (key === lastKey) return;
     const previous = lastKey;
     lastKey = key;
-    if (session) send({ action: 'webSession', ...session });
-    // Only a sign-out seen on this page counts; a page that was never signed in says nothing.
-    else if (previous) send({ action: 'webSignedOut' });
+    if (session) {
+      lastUserId = userIdOf(key);
+      send({ action: 'webSession', ...session });
+    } else if (previous) {
+      // Only a sign-out seen on this page counts; a page that was never signed in says nothing.
+      send({ action: 'webSignedOut', userId: lastUserId });
+    }
   }
 
   // A content script runs in an isolated world: wrapping localStorage.setItem here would never

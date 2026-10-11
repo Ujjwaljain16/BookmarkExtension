@@ -1,240 +1,333 @@
-importScripts('lib/config.js', 'lib/messaging.js');
+'use strict';
+// Service worker: the only part of the extension that talks to the Fuze API. Popup and options
+// pages ask it through runtime messages, so a single in-flight token refresh covers every caller.
+// Nothing important lives in worker memory (Chrome stops idle workers); state is in storage.
+
+importScripts('lib/config.js', 'lib/messaging.js', 'lib/auth.js');
+
+const { DEFAULT_API_BASE, isSaveableUrl, bookmarkLookupPath } = FuzeConfig;
+const { classifySender, isActionAllowed } = FuzeMessaging;
+const { createSession, AuthRequiredError } = FuzeAuth;
 
 const EXTENSION_ORIGIN = chrome.runtime.getURL('').replace(/\/$/, '');
+const ICON = 'icons/icon48.png';
+const IMPORT_BATCH = 1000;
+const IMPORT_STALE_MS = 3 * 60 * 1000;
 
-// The API base: the user's override from the options page, else the production API.
-async function getApiBase() {
-  const { apiBaseOverride } = await chrome.storage.local.get('apiBaseOverride');
-  return apiBaseOverride || FuzeConfig.DEFAULT_API_BASE;
+// --- settings ---------------------------------------------------------------------------------
+
+async function getSettings() {
+  const s = await chrome.storage.local.get(['apiBaseOverride', 'autoSync', 'allowPreviews', 'allowLocalhost']);
+  return {
+    apiBase: s.apiBaseOverride || DEFAULT_API_BASE,
+    customApi: Boolean(s.apiBaseOverride),
+    autoSync: s.autoSync !== false,
+    allowPreviews: Boolean(s.allowPreviews),
+    allowLocalhost: Boolean(s.allowLocalhost),
+  };
 }
 
-// Default settings
-const DEFAULT_SETTINGS = {
-  autoSync: true,
-  syncInterval: 5, // minutes
-  categories: ['work', 'personal', 'research', 'entertainment'],
-  theme: 'light'
+async function getApiBase() {
+  return (await getSettings()).apiBase;
+}
+
+// --- session ----------------------------------------------------------------------------------
+
+// The access token lives in session storage: memory only, gone when the browser closes, and not
+// readable by content scripts. The refresh token must survive restarts, so it is in local storage.
+const tokenStore = {
+  async get() {
+    const [{ accessToken }, { refreshToken, userId }] = await Promise.all([
+      chrome.storage.session.get('accessToken'),
+      chrome.storage.local.get(['refreshToken', 'userId']),
+    ]);
+    return { accessToken, refreshToken, userId };
+  },
+  async set({ accessToken, refreshToken, userId }) {
+    // The rotated refresh token first: losing it would end the session, losing the access token
+    // only costs a refresh.
+    const local = {};
+    if (refreshToken !== undefined) local.refreshToken = refreshToken;
+    if (userId !== undefined) local.userId = userId;
+    if (Object.keys(local).length) await chrome.storage.local.set(local);
+    if (accessToken !== undefined) await chrome.storage.session.set({ accessToken });
+  },
+  async clear() {
+    await chrome.storage.session.remove('accessToken');
+    await chrome.storage.local.remove(['refreshToken', 'userId']);
+  },
 };
 
-// Every message is checked before it is acted on: our own pages may use the extension's
-// features, the Fuze web app (through the bridge content script, top frame only) may only hand
-// over or end a sign-in, and anything else (other extensions, other sites, frames) is ignored.
-async function authorizeMessage(request, sender) {
-  if (!request || typeof request !== 'object') return false;
-  const { allowPreviews } = await chrome.storage.local.get('allowPreviews');
-  const kind = FuzeMessaging.classifySender(sender, {
-    runtimeId: chrome.runtime.id,
-    extensionOrigin: EXTENSION_ORIGIN,
-    allowPreviews: !!allowPreviews,
-  });
-  return FuzeMessaging.isActionAllowed(request.action, kind);
-}
-
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  authorizeMessage(request, sender).then((allowed) => {
-    if (allowed) handleMessage(request, sender, sendResponse);
-    else sendResponse({ error: 'forbidden' });
-  }, () => sendResponse({ error: 'forbidden' }));
-  return true;
+const session = createSession({
+  fetchImpl: (url, init) => fetch(url, init),
+  store: tokenStore,
+  getApiBase,
+  onSignedOut: () => broadcast({ action: 'authChanged', signedIn: false }),
 });
 
-function handleMessage(request, sender, sendResponse) {
-  try {
-    console.log('=== BACKGROUND: MESSAGE RECEIVED ===');
-    console.log('Background: Action:', request.action);
-    console.log('Background: From:', sender.url || sender.tab?.url || 'unknown');
-    console.log('Background: Has apiUrl:', !!request.apiUrl);
-    console.log('Background: Has authToken:', !!request.authToken);
-    
-    switch (request.action) {
-      case 'webSession':
-        // Signed in on the Fuze web app
-        if (typeof request.accessToken !== 'string' || !request.accessToken) break;
-        {
-          chrome.storage.local.set({
-            authToken: request.accessToken
-          }, () => {
-            if (chrome.runtime.lastError) {
-              console.error('Background: Error syncing auth token:', chrome.runtime.lastError);
-              return;
-            }
-            console.log('Background: Auth token synced successfully');
+// --- helpers ----------------------------------------------------------------------------------
 
-            // Notify all extension contexts (popup, etc.) to update status
-            chrome.runtime.sendMessage({
-              action: 'authStatusChanged',
-              authenticated: true
-            }).catch((error) => {
-              // Popup might not be open, that's OK
-              console.log('Background: No popup to notify:', error.message);
-            });
-          });
-        }
-        break;
+function broadcast(message) {
+  chrome.runtime.sendMessage(message).catch(() => {}); // no extension page open
+}
 
-      case 'webSignedOut':
-        // Clear auth token (user logged out)
-        console.log('Background: Clearing auth token due to logout');
-        chrome.storage.local.remove('authToken', () => {
-          if (chrome.runtime.lastError) {
-            console.error('Background: Error clearing auth token:', chrome.runtime.lastError);
-            return;
-          }
-          console.log('Background: Auth token cleared');
+function notify(title, message) {
+  chrome.notifications.create({ type: 'basic', iconUrl: ICON, title, message: String(message || '').slice(0, 250) });
+}
 
-          // Notify popup to update status
-          chrome.runtime.sendMessage({
-            action: 'authStatusChanged',
-            authenticated: false
-          }).catch((error) => {
-            console.log('Background: No popup to notify on clear:', error.message);
-          });
-        });
-        break;
+function describeError(error) {
+  if (error instanceof AuthRequiredError) return 'Sign in to Fuze from the extension or on the Fuze website.';
+  if (error instanceof TypeError || error.name === 'TimeoutError') return 'Could not reach Fuze. Check your connection.';
+  return error.message || 'Something went wrong';
+}
 
-      case 'startSSEStream':
-        // Start SSE stream from background script (has full permissions)
-        console.log('=== START SSE STREAM CASE TRIGGERED ===');
-        console.log('Background: Starting SSE stream for import progress');
-        
-        // Destructure carefully to debug
-        console.log('Request object:', { ...request, authToken: request.authToken ? `[${request.authToken.length} chars]` : 'MISSING' });
-        
-        const { authToken } = request;
+function logError(context, error) {
+  console.warn(`Fuze: ${context}: ${error && error.message ? error.message : error}`);
+}
 
-        console.log('Destructured authToken present:', !!authToken);
-        console.log('Destructured authToken length:', authToken ? authToken.length : 0);
-        console.log('Destructured authToken type:', typeof authToken);
-        
-        if (!authToken) {
-          console.error('ERROR: Missing authToken!');
-          sendResponse({ error: 'Missing authToken' });
-          return false;
-        }
-        
-        // Make SSE request from background script
-        const streamPath = '/api/bookmarks/import/progress/stream';
-        const streamHeaders = {
-          'Authorization': `Bearer ${authToken}`,
-          'Accept': 'text/event-stream',
-          'Cache-Control': 'no-cache'
-        };
-        
-        console.log('Background: Connecting to SSE:', streamPath);
-        console.log('Background: Headers to send:', {
-          'Authorization': `Bearer ${authToken.substring(0, 20)}...`,
-          'Accept': streamHeaders['Accept'],
-          'Cache-Control': streamHeaders['Cache-Control']
-        });
-        
-        // Process async fetch
-        (async () => {
-          try {
-            const streamUrl = `${await getApiBase()}${streamPath}`;
-            console.log('Background: Making fetch request...');
-            console.log('Background: URL:', streamUrl);
-            console.log('Background: Method: GET');
-            console.log('Background: Headers:', streamHeaders);
-            
-            const response = await fetch(streamUrl, {
-              method: 'GET',
-              headers: streamHeaders
-            });
-            
-            console.log('Background: Fetch completed!');
-            console.log('Background: SSE response status:', response.status);
-            console.log('Background: SSE response OK:', response.ok);
-            console.log('Background: SSE response headers:', Object.fromEntries(response.headers.entries()));
-            
-            if (!response.ok) {
-              const errorText = await response.text().catch(() => '');
-              console.error('Background: SSE connection failed:', response.status, errorText);
-              chrome.runtime.sendMessage({
-                action: 'sseError',
-                error: `SSE connection failed: ${response.status} - ${errorText}`
-              }).catch(() => {});
-              return;
-            }
-            
-            // Notify popup that stream started
-            chrome.runtime.sendMessage({
-              action: 'sseStreamStarted'
-            }).catch(() => {});
-            
-            // Stream the response back to popup
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
-            
-            console.log('Background: Starting to read SSE stream...');
-            let chunkCount = 0;
-            
-            while (true) {
-              const { done, value } = await reader.read();
-              chunkCount++;
-              
-              if (done) {
-                console.log(`Background: SSE stream closed after ${chunkCount} chunks`);
-                chrome.runtime.sendMessage({
-                  action: 'sseStreamClosed'
-                }).catch(() => {});
-                break;
-              }
-              
-              console.log(`Background: Received chunk #${chunkCount}, size: ${value.length} bytes`);
-              buffer += decoder.decode(value, { stream: true });
-              console.log(`Background: Buffer size: ${buffer.length} bytes`);
-              
-              const lines = buffer.split('\n\n');
-              buffer = lines.pop() || '';
-              
-              console.log(`Background: Found ${lines.length} complete SSE messages`);
-              
-              for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                  const data = line.substring(6);
-                  console.log('Background: Forwarding SSE data to popup:', data.substring(0, 100) + (data.length > 100 ? '...' : ''));
-                  
-                  // Forward SSE data to popup
-                  chrome.runtime.sendMessage({
-                    action: 'sseData',
-                    data: data
-                  }).then(() => {
-                    console.log('Background: Message forwarded successfully');
-                  }).catch((err) => {
-                    console.error('Background: Failed to forward message:', err);
-                  });
-                } else if (line.trim()) {
-                  console.log('Background: Non-data SSE line:', line);
-                }
-              }
-            }
-          } catch (error) {
-            console.error('Background: SSE stream error:', error);
-            chrome.runtime.sendMessage({
-              action: 'sseError',
-              error: error.message
-            }).catch(() => {});
-          }
-        })();
-        
-        // Send immediate response
-        sendResponse({ success: true });
-        return true; // Keep channel open for async operations
-        break;
+function normalizeTags(tags) {
+  const list = Array.isArray(tags) ? tags : String(tags || '').split(',');
+  return [...new Set(list.map((t) => String(t).trim()).filter(Boolean))].slice(0, 50);
+}
+
+async function saveBookmark({ url, title, description = '', tags = [], category }) {
+  const body = { url, title: String(title || '').slice(0, 500), description, tags: normalizeTags(tags) };
+  if (category) body.category = category;
+  const data = await session.apiJson('/api/bookmarks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return {
+    bookmarkId: data.bookmark ? data.bookmark.id : null,
+    wasDuplicate: Boolean(data.wasDuplicate),
+    contentCaptured: Boolean(data.contentCaptured),
+  };
+}
+
+// --- bulk import ------------------------------------------------------------------------------
+
+async function getImportState() {
+  const { importState } = await chrome.storage.session.get('importState');
+  if (importState && importState.status === 'running' && Date.now() - importState.updatedAt > IMPORT_STALE_MS) {
+    // The worker was stopped mid-import; the server finishes the batch it had.
+    return { ...importState, status: 'interrupted' };
+  }
+  return importState || null;
+}
+
+async function setImportState(state) {
+  await chrome.storage.session.set({ importState: { ...state, updatedAt: Date.now() } });
+}
+
+async function collectBookmarks() {
+  const out = [];
+  const walk = (node, folder) => {
+    if (node.url && isSaveableUrl(node.url)) {
+      out.push({ url: node.url, title: node.title || node.url, category: folder || 'Other' });
     }
+    for (const child of node.children || []) walk(child, node.url ? folder : node.title || folder);
+  };
+  (await chrome.bookmarks.getTree()).forEach((root) => walk(root, 'Other'));
+  return out;
+}
+
+async function runImport(batches, total) {
+  const totals = { total, added: 0, skipped: 0, errors: 0 };
+  try {
+    for (let i = 0; i < batches.length; i += 1) {
+      await setImportState({ status: 'running', batch: i + 1, batches: batches.length, ...totals });
+      const data = await session.apiJson('/api/bookmarks/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(batches[i]),
+      });
+      totals.added += data.added || 0;
+      totals.skipped += data.skipped || 0;
+      totals.errors += data.errors || 0;
+    }
+    await setImportState({ status: 'done', batch: batches.length, batches: batches.length, ...totals });
   } catch (error) {
-    console.error('Background: Error handling message:', error);
+    await setImportState({ status: 'failed', error: describeError(error), batches: batches.length, ...totals });
   }
 }
 
-// The sign-in bridge on Fuze preview deployments (and local dev servers in dev builds) is opt-in
-// from the options page, which asks for the host permission. Keep the registered scripts in step
-// with those settings and with permissions the user may revoke in chrome://extensions.
+// --- message handlers -------------------------------------------------------------------------
+
+const handlers = {
+  async getStatus({ verify }) {
+    const settings = await getSettings();
+    const status = { signedIn: await session.isSignedIn(), apiBase: settings.apiBase, settings };
+    if (!status.signedIn || !verify) return status;
+    try {
+      const data = await session.apiJson('/api/auth/verify');
+      const user = data.user || {};
+      return { ...status, user: { username: user.username || '', email: user.email || '' } };
+    } catch (error) {
+      if (error instanceof AuthRequiredError) return { ...status, signedIn: false };
+      return { ...status, offline: true };
+    }
+  },
+
+  async signIn({ email, password }) {
+    if (typeof email !== 'string' || typeof password !== 'string' || !email || !password) {
+      throw new Error('Enter your email and password');
+    }
+    const user = await session.signInWithPassword(email.trim(), password);
+    broadcast({ action: 'authChanged', signedIn: true });
+    return { user: user ? { username: user.username || '', email: user.email || '' } : null };
+  },
+
+  async signOut() {
+    await session.signOut();
+    return { signedIn: false };
+  },
+
+  async saveTab({ tabId, title, description, tags }) {
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab.url || !isSaveableUrl(tab.url)) throw new Error('Only web pages can be saved');
+    return saveBookmark({ url: tab.url, title: title || tab.title, description, tags });
+  },
+
+  async startImport({ limit }) {
+    const current = await getImportState();
+    if (current && current.status === 'running') return current;
+    if (!(await session.isSignedIn())) throw new AuthRequiredError();
+    let items = await collectBookmarks();
+    if (Number.isInteger(limit) && limit > 0) items = items.slice(0, limit);
+    const batches = [];
+    for (let i = 0; i < items.length; i += IMPORT_BATCH) batches.push(items.slice(i, i + IMPORT_BATCH));
+    await setImportState({ status: 'running', batch: 0, batches: batches.length, total: items.length, added: 0, skipped: 0, errors: 0 });
+    runImport(batches, items.length); // continues in the background; pages poll importStatus
+    return getImportState();
+  },
+
+  async importStatus() {
+    const state = await getImportState();
+    if (!state || state.status !== 'running') return state;
+    try {
+      const progress = await session.apiJson('/api/bookmarks/import/progress');
+      return { ...state, server: { processed: progress.processed || 0, total: progress.total || 0 } };
+    } catch (error) {
+      return state;
+    }
+  },
+
+  async countBookmarks() {
+    return { count: (await collectBookmarks()).length };
+  },
+
+  // From the Fuze web app (bridge content script).
+  async webSession({ refreshToken }) {
+    if (typeof refreshToken !== 'string' || !refreshToken) return { result: 'ignored' };
+    const result = await session.adoptWebSession(refreshToken);
+    if (result === 'adopted') broadcast({ action: 'authChanged', signedIn: true });
+    return { result };
+  },
+
+  async webSignedOut({ userId }) {
+    // Only the account that signed out on the web is signed out here.
+    const { userId: current } = await tokenStore.get();
+    if (current && userId != null && String(userId) === current) await session.signOut();
+    return {};
+  },
+};
+
+// Every message is checked first: our own pages may use the features above, the Fuze web app
+// (bridge content script, top frame) may only hand over or end a sign-in, anything else (other
+// extensions, other sites, frames) is refused.
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  (async () => {
+    if (!request || typeof request !== 'object') return { error: 'forbidden' };
+    const { allowPreviews } = await getSettings();
+    const kind = classifySender(sender, { runtimeId: chrome.runtime.id, extensionOrigin: EXTENSION_ORIGIN, allowPreviews });
+    if (!isActionAllowed(request.action, kind) || !Object.prototype.hasOwnProperty.call(handlers, request.action)) {
+      return { error: 'forbidden' };
+    }
+    return handlers[request.action](request);
+  })().then(
+    (result) => sendResponse(result === undefined ? {} : result),
+    (error) => sendResponse({ error: describeError(error), authRequired: error instanceof AuthRequiredError }),
+  );
+  return true;
+});
+
+// --- context menu -----------------------------------------------------------------------------
+
+chrome.contextMenus.onClicked.addListener((info, tab) => {
+  (async () => {
+    let url;
+    let title;
+    if (info.menuItemId === 'save-link') {
+      url = info.linkUrl;
+      title = info.selectionText || info.linkUrl;
+    } else if (info.menuItemId === 'save-page') {
+      url = info.pageUrl;
+      title = tab && tab.title;
+    } else {
+      return;
+    }
+    if (!isSaveableUrl(url)) {
+      notify('Fuze', 'Only web pages can be saved.');
+      return;
+    }
+    const result = await saveBookmark({ url, title });
+    notify(result.wasDuplicate ? 'Already in Fuze (updated)' : 'Saved to Fuze', title || url);
+  })().catch((error) => notify('Could not save to Fuze', describeError(error)));
+});
+
+// --- Chrome bookmark sync ---------------------------------------------------------------------
+
+// Bookmarks imported from another browser arrive as a flood of onCreated events; skip those.
+chrome.bookmarks.onImportBegan.addListener(() => chrome.storage.session.set({ chromeImporting: true }));
+chrome.bookmarks.onImportEnded.addListener(() => chrome.storage.session.remove('chromeImporting'));
+
+async function syncEnabled() {
+  const [{ autoSync }, { chromeImporting }, signedIn] = await Promise.all([
+    getSettings(), chrome.storage.session.get('chromeImporting'), session.isSignedIn(),
+  ]);
+  return autoSync && !chromeImporting && signedIn;
+}
+
+chrome.bookmarks.onCreated.addListener((id, node) => {
+  (async () => {
+    if (!node.url || !isSaveableUrl(node.url) || !(await syncEnabled())) return;
+    let category;
+    if (node.parentId) {
+      const [parent] = await chrome.bookmarks.get(node.parentId);
+      if (parent && parent.title) category = parent.title.toLowerCase().slice(0, 100);
+    }
+    const title = node.title || node.url;
+    const result = await saveBookmark({ url: node.url, title, category });
+    if (!result.wasDuplicate) notify('Saved to Fuze', title);
+  })().catch((error) => notify('Could not save to Fuze', describeError(error)));
+});
+
+chrome.bookmarks.onRemoved.addListener((id, removeInfo) => {
+  (async () => {
+    const node = removeInfo && removeInfo.node;
+    if (!node || !node.url || !isSaveableUrl(node.url) || !(await syncEnabled())) return;
+    // Another Chrome bookmark still points at this page: keep it in Fuze.
+    if ((await chrome.bookmarks.search({ url: node.url })).length) return;
+
+    const lookup = await session.apiFetch(bookmarkLookupPath(node.url));
+    if (lookup.status === 404) return; // never saved to Fuze, or already removed there
+    if (!lookup.ok) throw new Error(`Lookup failed (HTTP ${lookup.status})`);
+    const { bookmark } = await lookup.json();
+    const res = await session.apiFetch(`/api/bookmarks/${encodeURIComponent(bookmark.id)}`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 404) throw new Error(`Delete failed (HTTP ${res.status})`);
+    notify('Removed from Fuze', node.title || node.url);
+  })().catch((error) => notify('Could not remove from Fuze', describeError(error)));
+});
+
+// --- sign-in bridge on previews / local dev servers -------------------------------------------
+
+// Opt-in from the options page, which asks for the host permission. Keep the registered scripts
+// in step with those settings and with permissions the user may revoke in chrome://extensions.
 const BRIDGE_FILES = ['lib/config.js', 'content/fuze-bridge.js'];
 
 async function syncBridgeRegistrations() {
-  const { allowPreviews, allowLocalhost } = await chrome.storage.local.get(['allowPreviews', 'allowLocalhost']);
+  const { allowPreviews, allowLocalhost } = await getSettings();
   const wanted = [];
   if (allowPreviews && await chrome.permissions.contains({ origins: [FuzeConfig.PREVIEW_PERMISSION] })) {
     wanted.push({ id: 'fuze-bridge-previews', matches: [FuzeConfig.PREVIEW_PERMISSION] });
@@ -255,51 +348,28 @@ async function syncBridgeRegistrations() {
 }
 
 function resyncBridges() {
-  syncBridgeRegistrations().catch((e) => console.error('Background: bridge registration failed:', e.message));
+  syncBridgeRegistrations().catch((error) => logError('bridge registration', error));
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && ('allowPreviews' in changes || 'allowLocalhost' in changes)) resyncBridges();
+  if (area !== 'local') return;
+  if ('allowPreviews' in changes || 'allowLocalhost' in changes) resyncBridges();
+  if ('apiBaseOverride' in changes) {
+    // A session belongs to the server that issued it.
+    tokenStore.clear().then(() => broadcast({ action: 'authChanged', signedIn: false }));
+  }
 });
 chrome.permissions.onAdded.addListener(resyncBridges);
 chrome.permissions.onRemoved.addListener(resyncBridges);
 
-// Initialize
-chrome.runtime.onInstalled.addListener(() => {
-  migrateApiUrlSetting().catch((e) => console.error('Background: settings migration failed:', e.message));
-  resyncBridges();
-  try {
-    chrome.storage.local.get('autoSync', (data) => {
-      if (chrome.runtime.lastError) {
-        console.error('Background: Error getting autoSync setting:', chrome.runtime.lastError);
-        return;
-      }
-      if (data.autoSync === undefined) {
-        chrome.storage.local.set({ autoSync: true }, () => {
-          if (chrome.runtime.lastError) {
-            console.error('Background: Error setting default autoSync:', chrome.runtime.lastError);
-          }
-        });
-      }
-    });
+// --- install / update -------------------------------------------------------------------------
 
-    chrome.contextMenus.create({
-      id: 'save-to-fuze',
-      title: 'Save to Fuze',
-      contexts: ['page', 'link']
-    }, () => {
-      if (chrome.runtime.lastError) {
-        console.error('Background: Error creating context menu:', chrome.runtime.lastError);
-      }
-    });
-  } catch (error) {
-    console.error('Background: Error during initialization:', error);
-  }
-});
-
-// Older versions stored `apiUrl` and wrote the default into it on first run. Keep it only when
-// the user had actually pointed the extension somewhere else, as the new override setting.
-async function migrateApiUrlSetting() {
+async function migrateLegacySettings() {
+  // 1.0 kept only an access token, which can't be refreshed. The next visit to the Fuze website
+  // (or a sign-in from the options page) starts a proper session.
+  await chrome.storage.local.remove('authToken');
+  // 1.0 stored `apiUrl` and wrote the default into it on first run. Keep it only when the user
+  // had pointed the extension at another server, as the new override setting.
   const { apiUrl } = await chrome.storage.local.get('apiUrl');
   if (apiUrl === undefined) return;
   await chrome.storage.local.remove('apiUrl');
@@ -309,307 +379,16 @@ async function migrateApiUrlSetting() {
   } catch (e) {
     return;
   }
-  if (base !== FuzeConfig.DEFAULT_API_BASE) {
-    const granted = await chrome.permissions.contains({ origins: [FuzeConfig.originPermission(base)] });
-    if (granted) await chrome.storage.local.set({ apiBaseOverride: base });
+  if (base !== DEFAULT_API_BASE && await chrome.permissions.contains({ origins: [FuzeConfig.originPermission(base)] })) {
+    await chrome.storage.local.set({ apiBaseOverride: base });
   }
 }
 
-// Helper function to get auth token
-async function getAuthToken() {
-  const { authToken } = await chrome.storage.local.get('authToken');
-  return authToken;
-}
-
-// Function to process bookmark from extension
-async function processBookmarkFromExtension({ title, url, description = '', category = 'other', tags = '' }) {
-  const apiUrl = await getApiBase();
-  const authToken = await getAuthToken();
-
-  if (!authToken) {
-    throw new Error('Not authenticated. Please log in to Fuze.');
-  }
-
-  const bookmarkData = {
-    title,
-    url,
-    description,
-    category,
-    tags: tags.split(',').map(tag => tag.trim()).filter(tag => tag)
-  };
-
-  const response = await fetch(`${apiUrl}/api/bookmarks`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${authToken}`
-    },
-    body: JSON.stringify(bookmarkData)
+chrome.runtime.onInstalled.addListener(() => {
+  migrateLegacySettings().catch((error) => logError('settings migration', error));
+  resyncBridges();
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({ id: 'save-page', title: 'Save page to Fuze', contexts: ['page'] });
+    chrome.contextMenus.create({ id: 'save-link', title: 'Save link to Fuze', contexts: ['link'] });
   });
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.message || 'Failed to save bookmark');
-  }
-
-  return await response.json();
-}
-
-// Helper function to check if URL is a Chrome internal URL
-const isChromeInternalUrl = (url) => {
-  try {
-    const urlObj = new URL(url);
-    return urlObj.protocol === 'chrome:' || 
-           urlObj.protocol === 'chrome-extension:' || 
-           urlObj.protocol === 'about:' ||
-           urlObj.protocol === 'edge:' ||
-           urlObj.protocol === 'moz-extension:';
-  } catch (e) {
-    return false;
-  }
-};
-
-// The Fuze id of the bookmark saved under exactly this URL, or null when there is none.
-async function getBookmarkId(url) {
-  const apiUrl = await getApiBase();
-  const authToken = await getAuthToken();
-  if (!authToken) return null;
-
-  const response = await fetch(`${apiUrl}${FuzeConfig.bookmarkLookupPath(url)}`, {
-    headers: {
-      'Authorization': `Bearer ${authToken}`,
-      'Accept': 'application/json'
-    }
-  });
-  if (response.status === 404) return null;
-  if (!response.ok) throw new Error(`Lookup failed: HTTP ${response.status}`);
-  const data = await response.json();
-  return data.bookmark ? data.bookmark.id : null;
-}
-
-// Handle bookmark creation
-chrome.bookmarks.onCreated.addListener(async (id) => {
-  try {
-    // Check if extension context is still valid
-    if (!chrome || !chrome.bookmarks || !chrome.storage) {
-      console.warn('Background: Extension context invalidated during bookmark creation');
-      return;
-    }
-    // Get autoSync setting from local storage
-    const { autoSync } = await chrome.storage.local.get('autoSync');
-    if (!autoSync) return;
-
-    // Get full bookmark details
-    const [bookmark] = await chrome.bookmarks.get(id);
-    if (!bookmark.url) return;
-
-    // Skip Chrome internal URLs
-    if (isChromeInternalUrl(bookmark.url)) {
-      console.log('Skipping Chrome internal URL:', bookmark.url);
-      return;
-    }
-
-    // Get parent folder name for category
-    let category = 'other';
-    if (bookmark.parentId) {
-      const [parent] = await chrome.bookmarks.get(bookmark.parentId);
-      if (parent && parent.title) {
-        category = parent.title.toLowerCase();
-      }
-    }
-
-    // Prepare bookmark data
-    const bookmarkData = {
-      url: bookmark.url,
-      title: bookmark.title || bookmark.url,
-      description: '',
-      category,
-      tags: []
-    };
-
-    // Get API URL and auth token from settings
-    const apiUrl = await getApiBase();
-    const authToken = await getAuthToken();
-        
-    if (!authToken) {
-      throw new Error('Not authenticated. Please log in to Fuze.');
-    }
-
-    // Send to API
-    const response = await fetch(`${apiUrl}/api/bookmarks`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'Authorization': `Bearer ${authToken}`
-      },
-      body: JSON.stringify(bookmarkData)
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
-    }
-
-    const result = await response.json();
-    
-    // Show appropriate notification based on whether it was a duplicate
-    chrome.notifications.create({
-      type: 'basic',
-      iconUrl: '/icons/icon48.png',
-      title: result.wasDuplicate ? 'Bookmark Updated' : 'Bookmark Saved',
-      message: result.wasDuplicate 
-        ? `Updated "${bookmarkData.title}" in Fuze`
-        : `Successfully saved "${bookmarkData.title}" to Fuze`
-    });
-  } catch (error) {
-    console.error('Error syncing bookmark:', error);
-    let errorMessage = 'Failed to save bookmark';
-    
-    if (error.message.includes('API URL not configured')) {
-      errorMessage = 'Please configure the API URL in extension settings';
-    } else if (error.message.includes('Not authenticated')) {
-      errorMessage = 'Please log in to Fuze in the extension settings';
-    } else if (error.message.includes('Failed to fetch')) {
-      errorMessage = 'Could not connect to Fuze. Please check your API URL and server status.';
-    } else {
-      errorMessage += `: ${error.message}`;
-    }
-
-    chrome.notifications.create({
-      type: 'basic',
-      iconUrl: '/icons/icon48.png',
-      title: 'Save Failed',
-      message: errorMessage
-    });
-  }
-});
-
-// Handle bookmark removal
-chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
-  try {
-    // Check if extension context is still valid
-    if (!chrome || !chrome.bookmarks || !chrome.storage) {
-      console.warn('Background: Extension context invalidated during bookmark removal');
-      return;
-    }
-    // Get autoSync setting from local storage
-    const { autoSync } = await chrome.storage.local.get('autoSync');
-    if (!autoSync) return;
-
-    // Use the removeInfo to get the bookmark details
-    if (!removeInfo || !removeInfo.node || !removeInfo.node.url) {
-      console.log('No bookmark details available for removal');
-      return;
-    }
-
-    const bookmarkUrl = removeInfo.node.url;
-    console.log('Removing bookmark:', bookmarkUrl);
-
-    // Skip Chrome internal URLs
-    if (isChromeInternalUrl(bookmarkUrl)) {
-      console.log('Skipping Chrome internal URL:', bookmarkUrl);
-      return;
-    }
-
-    // Get API URL and auth token from settings
-    const apiUrl = await getApiBase();
-    const authToken = await getAuthToken();
-        
-    if (!authToken) {
-      throw new Error('Not authenticated. Please log in to Fuze.');
-    }
-
-    // Resolve the exact URL to its Fuze id, then delete by id.
-    const bookmarkId = await getBookmarkId(bookmarkUrl);
-    if (!bookmarkId) {
-      // Never saved to Fuze (or already removed there): nothing to do.
-      return;
-    }
-
-    const response = await fetch(`${apiUrl}/api/bookmarks/${bookmarkId}`, {
-      method: 'DELETE',
-      headers: {
-        'Accept': 'application/json',
-        'Authorization': `Bearer ${authToken}`
-      }
-    });
-    if (!response.ok && response.status !== 404) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
-    }
-
-    console.log('Bookmark removed from Fuze successfully');
-
-    // Show success notification
-    chrome.notifications.create({
-      type: 'basic',
-      iconUrl: '/icons/icon48.png',
-      title: 'Bookmark Removed',
-      message: `Successfully removed bookmark from Fuze`
-    });
-  } catch (error) {
-    console.error('Error removing bookmark from Fuze:', {
-      error: error.message,
-      bookmarkUrl: removeInfo?.node?.url,
-      apiUrl: await getApiBase()
-    });
-
-    // Show error notification
-    chrome.notifications.create({
-      type: 'basic',
-      iconUrl: '/icons/icon48.png',
-      title: 'Remove Failed',
-      message: 'Failed to remove bookmark from Fuze'
-    });
-  }
-});
-
-// Handle context menu clicks
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  try {
-    // Check if extension context is still valid
-    if (!chrome || !chrome.tabs || !chrome.storage) {
-      console.warn('Background: Extension context invalidated during context menu click');
-      return;
-    }
-
-    if (info.menuItemId === 'save-to-fuze') {
-    const url = info.linkUrl || info.pageUrl;
-    const title = tab.title || '';
-    
-    // Skip Chrome internal URLs
-    if (isChromeInternalUrl(url)) {
-      chrome.notifications.create({
-        type: 'basic',
-        iconUrl: '/icons/icon48.png',
-        title: 'Fuze',
-        message: 'Cannot save Chrome internal pages'
-      });
-      return;
-    }
-    
-    try {
-      const saved = await processBookmarkFromExtension({ title, url });
-      
-      chrome.notifications.create({
-        type: 'basic',
-        iconUrl: '/icons/icon48.png',
-        title: 'Fuze',
-        message: 'Bookmark saved successfully!'
-      });
-      
-    } catch (error) {
-      console.error('Error saving bookmark:', error);
-      chrome.notifications.create({
-        type: 'basic',
-        iconUrl: '/icons/icon48.png',
-        title: 'Fuze Error',
-        message: error.message || 'Failed to save bookmark'
-      });
-    }
-  }
-  } catch (error) {
-    console.error('Background: Error in context menu handler:', error);
-  }
 });

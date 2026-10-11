@@ -17,13 +17,12 @@ async function loadApiBase() {
   apiInput.value = apiBaseOverride || '';
 }
 
-// A session belongs to the server that issued it; switching servers signs the extension out.
+// A session belongs to the server that issued it; the service worker signs out when this changes.
 async function switchApiBase(override) {
   const { apiBaseOverride } = await chrome.storage.local.get('apiBaseOverride');
   if ((apiBaseOverride || null) === (override || null)) return false;
   if (override) await chrome.storage.local.set({ apiBaseOverride: override });
   else await chrome.storage.local.remove('apiBaseOverride');
-  await chrome.storage.local.remove(['authToken']);
   if (apiBaseOverride) {
     await chrome.permissions.remove({ origins: [originPermission(apiBaseOverride)] }).catch(() => {});
   }
@@ -99,5 +98,95 @@ function bindOriginToggle(id, key, origins) {
 bindOriginToggle('allow-previews', 'allowPreviews', [FuzeConfig.PREVIEW_PERMISSION]);
 bindOriginToggle('allow-localhost', 'allowLocalhost', FuzeConfig.DEV_PERMISSIONS);
 
+// --- account (all API calls go through the service worker) ---
+
+const send = (message) => chrome.runtime.sendMessage(message);
+const accountMsg = document.getElementById('account-msg');
+
+async function loadAccount() {
+  const status = await send({ action: 'getStatus', verify: true });
+  const who = status.user && (status.user.username || status.user.email);
+  document.getElementById('account-status').textContent = status.signedIn
+    ? `Signed in${who ? ' as ' + who : ''}${status.offline ? ' (server unreachable)' : ''}.`
+    : 'Not signed in.';
+  document.getElementById('signin-form').hidden = Boolean(status.signedIn);
+  document.getElementById('signout-row').hidden = !status.signedIn;
+  document.getElementById('auto-sync').checked = status.settings.autoSync;
+}
+
+document.getElementById('signin-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const button = document.getElementById('signin-btn');
+  button.disabled = true;
+  accountMsg.textContent = '';
+  try {
+    const result = await send({
+      action: 'signIn',
+      email: document.getElementById('email').value,
+      password: document.getElementById('password').value,
+    });
+    accountMsg.textContent = result.error || '';
+    accountMsg.classList.toggle('error', Boolean(result.error));
+  } finally {
+    document.getElementById('password').value = '';
+    button.disabled = false;
+    loadAccount();
+  }
+});
+
+document.getElementById('signout-btn').addEventListener('click', async () => {
+  await send({ action: 'signOut' });
+  loadAccount();
+});
+
+document.getElementById('auto-sync').addEventListener('change', (e) => {
+  chrome.storage.local.set({ autoSync: e.target.checked });
+});
+
+// --- bulk import ---
+
+const importStatus = document.getElementById('import-status');
+let importPoll = null;
+
+function showImport(state) {
+  if (!state) return;
+  if (state.error && !state.status) {
+    importStatus.textContent = state.error;
+    return;
+  }
+  const counts = `${state.added || 0} added, ${state.skipped || 0} skipped`;
+  if (state.status === 'running') {
+    const server = state.server && state.server.total ? ` (${state.server.processed}/${state.server.total})` : '';
+    importStatus.textContent = `Importing ${state.total} bookmarks: batch ${state.batch}/${state.batches}${server}...`;
+  } else if (state.status === 'done') {
+    importStatus.textContent = `Import finished: ${counts} of ${state.total}.`;
+  } else {
+    importStatus.textContent = `Import ${state.status}: ${state.error || counts}.`;
+  }
+  const running = state.status === 'running';
+  document.getElementById('import-btn').disabled = running;
+  if (running && !importPoll) importPoll = setInterval(async () => showImport(await send({ action: 'importStatus' })), 2000);
+  if (!running && importPoll) {
+    clearInterval(importPoll);
+    importPoll = null;
+  }
+}
+
+document.getElementById('import-btn').addEventListener('click', async () => {
+  const { count } = await send({ action: 'countBookmarks' });
+  if (!count) {
+    importStatus.textContent = 'No Chrome bookmarks to import.';
+    return;
+  }
+  if (!confirm(`Import ${count} Chrome bookmarks into Fuze?`)) return;
+  showImport(await send({ action: 'startImport' }));
+});
+
+chrome.runtime.onMessage.addListener((message, sender) => {
+  if (sender && sender.id === chrome.runtime.id && !sender.tab && message.action === 'authChanged') loadAccount();
+});
+
+loadAccount();
+send({ action: 'importStatus' }).then(showImport);
 loadApiBase();
 loadWebOrigins();
