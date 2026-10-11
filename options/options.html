@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Fuze Web Clipper settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <h1>Fuze Web Clipper</h1>
+
+    <section id="server-section">
+      <h2>API server</h2>
+      <p class="hint">Leave empty to use Fuze (<span id="default-api"></span>). Point it at another server only if you
+        run your own. The extension asks for permission to reach that server, and you sign in again there.</p>
+      <label for="api-base">API URL</label>
+      <input type="url" id="api-base" autocomplete="off" spellcheck="false">
+      <div class="row">
+        <button id="save-api" type="button">Save</button>
+        <button id="reset-api" type="button" class="secondary">Use Fuze</button>
+      </div>
+      <p id="api-status" class="status" role="status"></p>
+    </section>
+  </main>
+  <script src="../lib/config.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>

@@ -32,6 +32,16 @@ test('every file the manifest names exists', () => {
   }
 });
 
+test('host permissions are limited to the default API; anything else is optional', () => {
+  const config = require('../lib/config.js');
+  assert.deepEqual(manifest.host_permissions, [config.originPermission(config.DEFAULT_API_BASE)]);
+  assert.ok(!manifest.permissions.includes('tabs'), 'activeTab covers the tab being saved');
+  assert.ok(!manifest.permissions.includes('<all_urls>'));
+  for (const pattern of manifest.optional_host_permissions || []) {
+    assert.notEqual(pattern, '<all_urls>');
+  }
+});
+
 test('the file is named manifest.json exactly (Chrome on Linux and macOS is case-sensitive)', () => {
   assert.ok(fs.readdirSync(root).includes('manifest.json'));
 });

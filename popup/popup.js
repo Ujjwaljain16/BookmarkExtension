@@ -1,6 +1,11 @@
 // Add processBookmarkFromExtension directly here
+async function getApiBase() {
+  const { apiBaseOverride } = await chrome.storage.local.get('apiBaseOverride');
+  return apiBaseOverride || FuzeConfig.DEFAULT_API_BASE;
+}
+
 async function processBookmarkFromExtension({ title, url, description = '', tags = '' }) {
-  const { apiUrl } = await chrome.storage.local.get('apiUrl');
+  const apiUrl = await getApiBase();
   const authToken = await chrome.storage.local.get('authToken').then(data => data.authToken);
   
   if (!authToken) {
@@ -60,23 +65,10 @@ document.addEventListener('DOMContentLoaded', function() {
   });
 
   // Load settings and update connection status
-  chrome.storage.local.get(['apiUrl', 'authToken', 'autoSync'], function(data) {
-    // Default to production API URL
-    const defaultApiUrl = 'https://Ujjwaljain16-fuze-backend.hf.space';
-    if (data.apiUrl) {
-      document.getElementById('api-url').value = data.apiUrl;
-    } else {
-      // Set default production URL
-      document.getElementById('api-url').value = defaultApiUrl;
-      chrome.storage.local.set({ apiUrl: defaultApiUrl });
-    }
-
+  chrome.storage.local.get(['authToken', 'autoSync'], async function(data) {
     // Set auto-sync checkbox state
     autoSyncCheckbox.checked = !!data.autoSync;
-
-    // Validate authentication status (use default if no API URL)
-    const apiUrl = data.apiUrl || 'https://Ujjwaljain16-fuze-backend.hf.space';
-    validateAuthentication(data.authToken, apiUrl);
+    validateAuthentication(data.authToken, await getApiBase());
   });
 
   // Function to validate authentication status
@@ -149,10 +141,7 @@ document.addEventListener('DOMContentLoaded', function() {
       if (status === 'settings') {
         connectionStatus.style.cursor = 'pointer';
         connectionStatus.style.textDecoration = 'underline';
-        connectionStatus.onclick = () => {
-          mainForm.style.display = 'none';
-          settingsForm.style.display = 'block';
-        };
+        connectionStatus.onclick = () => chrome.runtime.openOptionsPage();
       }
     }
   }
@@ -161,7 +150,7 @@ document.addEventListener('DOMContentLoaded', function() {
   function redirectToFuzeLogin() {
     // Open Fuze login page in a new tab
     chrome.tabs.create({
-      url: 'https://itsfuze.vercel.app/login',
+      url: FuzeConfig.FUZE_WEB_ORIGIN + '/login',
       active: true
     });
 
@@ -193,8 +182,8 @@ document.addEventListener('DOMContentLoaded', function() {
         lastAuthToken = currentToken;
         console.log('Popup: Auth status changed, revalidating...');
         // Re-check authentication status when it changes
-        chrome.storage.local.get(['authToken', 'apiUrl'], function(data) {
-          validateAuthentication(data.authToken, data.apiUrl);
+        chrome.storage.local.get(['authToken'], async function(data) {
+          validateAuthentication(data.authToken, await getApiBase());
         });
       });
     }
@@ -219,6 +208,11 @@ document.addEventListener('DOMContentLoaded', function() {
     redirectToFuzeSignup();
   });
 
+  document.getElementById('open-options').addEventListener('click', function(e) {
+    e.preventDefault();
+    chrome.runtime.openOptionsPage();
+  });
+
   extensionSettingsLink.addEventListener('click', function(e) {
     e.preventDefault();
     authPrompt.style.display = 'none';
@@ -229,7 +223,7 @@ document.addEventListener('DOMContentLoaded', function() {
   // Function to redirect to Fuze signup page
   function redirectToFuzeSignup() {
     chrome.tabs.create({
-      url: 'https://itsfuze.vercel.app/signup',
+      url: FuzeConfig.FUZE_WEB_ORIGIN + '/signup',
       active: true
     });
     window.close();
@@ -252,11 +246,11 @@ document.addEventListener('DOMContentLoaded', function() {
   loginButton.addEventListener('click', async function(e) {
     e.preventDefault();
     
-    const apiUrl = document.getElementById('api-url').value.trim();
+    const apiUrl = await getApiBase();
     const email = document.getElementById('email').value.trim();
     const password = document.getElementById('password').value;
-    
-    if (!apiUrl || !email || !password) {
+
+    if (!email || !password) {
       alert('Please fill in all fields');
       return;
     }
@@ -280,9 +274,8 @@ document.addEventListener('DOMContentLoaded', function() {
       
       const data = await response.json();
       
-      // Store auth token and settings
+      // Store auth token
       await chrome.storage.local.set({ authToken: data.access_token });
-      await chrome.storage.local.set({ apiUrl: apiUrl });
       
       connectionStatus.textContent = 'Connected to Fuze';
       connectionStatus.style.color = '#047857';
@@ -305,16 +298,9 @@ document.addEventListener('DOMContentLoaded', function() {
   saveSettingsButton.addEventListener('click', function(e) {
     e.preventDefault();
     
-    const apiUrl = document.getElementById('api-url').value.trim();
     const autoSync = autoSyncCheckbox.checked;
-    
-    if (!apiUrl) {
-      alert('Please enter a valid API URL');
-      return;
-    }
-    
+
     chrome.storage.local.set({
-      apiUrl: apiUrl,
       autoSync: autoSync
     }, function() {
       showStatus('Settings saved successfully', 'success');
@@ -351,12 +337,9 @@ document.addEventListener('DOMContentLoaded', function() {
   form.addEventListener('submit', async function(e) {
     e.preventDefault();
     
-    chrome.storage.local.get(['apiUrl', 'authToken'], async function(data) {
-      if (!data.apiUrl) {
-        showStatus('Please configure API URL in settings', 'error');
-        return;
-      }
-      
+    chrome.storage.local.get(['authToken'], async function(data) {
+      data.apiUrl = await getApiBase();
+            
       if (!data.authToken) {
         showStatus('Please log in to Fuze in settings', 'error');
         return;
@@ -446,12 +429,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const originalText = importButton.textContent;
 
     try {
-      const { apiUrl, authToken } = await chrome.storage.local.get(['apiUrl', 'authToken']);
-
-      if (!apiUrl) {
-        alert('Please configure API URL in settings');
-        return;
-      }
+      const { authToken } = await chrome.storage.local.get(['authToken']);
+      const apiUrl = await getApiBase();
 
       if (!authToken) {
         alert('Please log in to Fuze first');
@@ -592,8 +571,7 @@ document.addEventListener('DOMContentLoaded', function() {
       let sseConnectionAttempted = false; // Track if we've attempted SSE connection
 
       // Re-fetch token to ensure we have the latest one
-      const latestData = await chrome.storage.local.get(['apiUrl', 'authToken']);
-      const latestApiUrl = latestData.apiUrl || apiUrl;
+      const latestData = await chrome.storage.local.get(['authToken']);
       const latestAuthToken = latestData.authToken || authToken;
       
       if (!latestAuthToken) {
@@ -608,7 +586,6 @@ document.addEventListener('DOMContentLoaded', function() {
         // Use background script to make SSE request (has full permissions)
         const messageToSend = {
           action: 'startSSEStream',
-          apiUrl: latestApiUrl,
           authToken: latestAuthToken
         };
         

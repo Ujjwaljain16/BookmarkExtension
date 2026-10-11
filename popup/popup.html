@@ -80,11 +80,6 @@
   
   <div id="settings-form" style="display: none;">
     <div class="form-group">
-      <label for="api-url">Fuze API URL</label>
-      <input type="url" id="api-url" placeholder="https://Ujjwaljain16-fuze-backend.hf.space">
-    </div>
-    
-    <div class="form-group">
       <label for="email">Email</label>
       <input type="email" id="email" placeholder="your@email.com">
     </div>
@@ -107,8 +102,10 @@
     <button id="save-settings" class="btn">Save Settings</button>
     <button id="import-bookmarks" class="btn" style="background: linear-gradient(to right, #4DD0E1, #14B8A6); margin-top: 8px;">Import All Bookmarks</button>
     <button id="back-button" class="btn" style="background-color: #6b7280; margin-top: 8px;">Back</button>
+    <p class="advanced-link"><a href="#" id="open-options">Advanced settings (API server)</a></p>
   </div>
 
+  <script src="../lib/config.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

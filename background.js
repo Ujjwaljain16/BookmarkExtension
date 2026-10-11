@@ -1,3 +1,11 @@
+importScripts('lib/config.js');
+
+// The API base: the user's override from the options page, else the production API.
+async function getApiBase() {
+  const { apiBaseOverride } = await chrome.storage.local.get('apiBaseOverride');
+  return apiBaseOverride || FuzeConfig.DEFAULT_API_BASE;
+}
+
 // Default settings
 const DEFAULT_SETTINGS = {
   autoSync: true,
@@ -20,37 +28,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // Sync auth token from Fuze platform to extension
         console.log('Background: Syncing auth token from Fuze platform, token length:', request.token ? request.token.length : 0);
         
-        // Get existing API URL to preserve it, or use smart default
-        chrome.storage.local.get(['apiUrl'], (existingData) => {
-          // Smart default: use production API URL
-          // Supports both development (localhost) and production
-          let defaultApiUrl = 'https://Ujjwaljain16-fuze-backend.hf.space'; // Production default
-          try {
-            // Try to detect if we're in development or production
-            // Check if we're on localhost or if manifest indicates production
-            if (chrome.runtime.getManifest && chrome.runtime.getManifest().homepage_url) {
-              const homepage = chrome.runtime.getManifest().homepage_url;
-              const url = new URL(homepage);
-              // If homepage is localhost, use localhost API
-              if (url.hostname.includes('localhost') || url.hostname.includes('127.0.0.1')) {
-                defaultApiUrl = 'http://localhost:5000'; // Development
-              }
-            }
-          } catch (e) {
-            // Fallback: use production URL
-            console.log('Using default production API URL');
-          }
-          const apiUrl = existingData.apiUrl || defaultApiUrl;
-          
+        {
           chrome.storage.local.set({
-            authToken: request.token,
-            apiUrl: apiUrl // Preserve existing API URL or use localhost default
+            authToken: request.token
           }, () => {
             if (chrome.runtime.lastError) {
               console.error('Background: Error syncing auth token:', chrome.runtime.lastError);
               return;
             }
-            console.log('Background: Auth token synced successfully, API URL:', apiUrl);
+            console.log('Background: Auth token synced successfully');
 
             // Notify all extension contexts (popup, etc.) to update status
             chrome.runtime.sendMessage({
@@ -61,7 +47,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               console.log('Background: No popup to notify:', error.message);
             });
           });
-        });
+        }
         break;
 
       case 'clearAuthToken':
@@ -92,18 +78,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // Destructure carefully to debug
         console.log('Request object:', { ...request, authToken: request.authToken ? `[${request.authToken.length} chars]` : 'MISSING' });
         
-        const { apiUrl, authToken } = request;
-        
-        console.log('Destructured apiUrl:', apiUrl);
+        const { authToken } = request;
+
         console.log('Destructured authToken present:', !!authToken);
         console.log('Destructured authToken length:', authToken ? authToken.length : 0);
         console.log('Destructured authToken type:', typeof authToken);
-        
-        if (!apiUrl) {
-          console.error('ERROR: Missing apiUrl!');
-          sendResponse({ error: 'Missing apiUrl' });
-          return false;
-        }
         
         if (!authToken) {
           console.error('ERROR: Missing authToken!');
@@ -112,14 +91,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         
         // Make SSE request from background script
-        const streamUrl = `${apiUrl}/api/bookmarks/import/progress/stream`;
+        const streamPath = '/api/bookmarks/import/progress/stream';
         const streamHeaders = {
           'Authorization': `Bearer ${authToken}`,
           'Accept': 'text/event-stream',
           'Cache-Control': 'no-cache'
         };
         
-        console.log('Background: Connecting to SSE:', streamUrl);
+        console.log('Background: Connecting to SSE:', streamPath);
         console.log('Background: Headers to send:', {
           'Authorization': `Bearer ${authToken.substring(0, 20)}...`,
           'Accept': streamHeaders['Accept'],
@@ -129,6 +108,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // Process async fetch
         (async () => {
           try {
+            const streamUrl = `${await getApiBase()}${streamPath}`;
             console.log('Background: Making fetch request...');
             console.log('Background: URL:', streamUrl);
             console.log('Background: Method: GET');
@@ -228,6 +208,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 // Initialize
 chrome.runtime.onInstalled.addListener(() => {
+  migrateApiUrlSetting().catch((e) => console.error('Background: settings migration failed:', e.message));
   try {
     chrome.storage.local.get('autoSync', (data) => {
       if (chrome.runtime.lastError) {
@@ -257,6 +238,24 @@ chrome.runtime.onInstalled.addListener(() => {
   }
 });
 
+// Older versions stored `apiUrl` and wrote the default into it on first run. Keep it only when
+// the user had actually pointed the extension somewhere else, as the new override setting.
+async function migrateApiUrlSetting() {
+  const { apiUrl } = await chrome.storage.local.get('apiUrl');
+  if (apiUrl === undefined) return;
+  await chrome.storage.local.remove('apiUrl');
+  let base;
+  try {
+    base = FuzeConfig.normalizeApiBase(apiUrl);
+  } catch (e) {
+    return;
+  }
+  if (base !== FuzeConfig.DEFAULT_API_BASE) {
+    const granted = await chrome.permissions.contains({ origins: [FuzeConfig.originPermission(base)] });
+    if (granted) await chrome.storage.local.set({ apiBaseOverride: base });
+  }
+}
+
 // Helper function to get auth token
 async function getAuthToken() {
   const { authToken } = await chrome.storage.local.get('authToken');
@@ -265,15 +264,11 @@ async function getAuthToken() {
 
 // Function to process bookmark from extension
 async function processBookmarkFromExtension({ title, url, description = '', category = 'other', tags = '' }) {
-  const { apiUrl } = await chrome.storage.local.get('apiUrl');
+  const apiUrl = await getApiBase();
   const authToken = await getAuthToken();
 
   if (!authToken) {
     throw new Error('Not authenticated. Please log in to Fuze.');
-  }
-
-  if (!apiUrl) {
-    throw new Error('API URL not configured. Please set it in the extension settings.');
   }
 
   const bookmarkData = {
@@ -341,8 +336,7 @@ async function getBookmarkId(url) {
     }
     
     // If not in cache, fetch all bookmarks and find the matching one
-    const { apiUrl } = await chrome.storage.local.get('apiUrl');
-    if (!apiUrl) return null;
+    const apiUrl = await getApiBase();
     
     const authToken = await getAuthToken();
     if (!authToken) return null;
@@ -412,13 +406,9 @@ chrome.bookmarks.onCreated.addListener(async (id) => {
     };
 
     // Get API URL and auth token from settings
-    const { apiUrl } = await chrome.storage.local.get('apiUrl');
+    const apiUrl = await getApiBase();
     const authToken = await getAuthToken();
-    
-    if (!apiUrl) {
-      throw new Error('API URL not configured. Please set it in the extension settings.');
-    }
-    
+        
     if (!authToken) {
       throw new Error('Not authenticated. Please log in to Fuze.');
     }
@@ -506,13 +496,9 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
     }
 
     // Get API URL and auth token from settings
-    const { apiUrl } = await chrome.storage.local.get('apiUrl');
+    const apiUrl = await getApiBase();
     const authToken = await getAuthToken();
-    
-    if (!apiUrl) {
-      throw new Error('API URL not configured. Please set it in the extension settings.');
-    }
-    
+        
     if (!authToken) {
       throw new Error('Not authenticated. Please log in to Fuze.');
     }
@@ -584,7 +570,7 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
       error: error.message,
       bookmarkUrl: removeInfo?.node?.url,
       normalizedUrl: removeInfo?.node?.url ? normalizeUrl(removeInfo.node.url) : null,
-      apiUrl: await chrome.storage.local.get('apiUrl').then(data => data.apiUrl)
+      apiUrl: await getApiBase()
     });
 
     // Show error notification
