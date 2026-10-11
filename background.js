@@ -1,4 +1,6 @@
-importScripts('lib/config.js');
+importScripts('lib/config.js', 'lib/messaging.js');
+
+const EXTENSION_ORIGIN = chrome.runtime.getURL('').replace(/\/$/, '');
 
 // The API base: the user's override from the options page, else the production API.
 async function getApiBase() {
@@ -14,8 +16,29 @@ const DEFAULT_SETTINGS = {
   theme: 'light'
 };
 
-// Handle messages from content script and popup
+// Every message is checked before it is acted on: our own pages may use the extension's
+// features, the Fuze web app (through the bridge content script, top frame only) may only hand
+// over or end a sign-in, and anything else (other extensions, other sites, frames) is ignored.
+async function authorizeMessage(request, sender) {
+  if (!request || typeof request !== 'object') return false;
+  const { allowPreviews } = await chrome.storage.local.get('allowPreviews');
+  const kind = FuzeMessaging.classifySender(sender, {
+    runtimeId: chrome.runtime.id,
+    extensionOrigin: EXTENSION_ORIGIN,
+    allowPreviews: !!allowPreviews,
+  });
+  return FuzeMessaging.isActionAllowed(request.action, kind);
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  authorizeMessage(request, sender).then((allowed) => {
+    if (allowed) handleMessage(request, sender, sendResponse);
+    else sendResponse({ error: 'forbidden' });
+  }, () => sendResponse({ error: 'forbidden' }));
+  return true;
+});
+
+function handleMessage(request, sender, sendResponse) {
   try {
     console.log('=== BACKGROUND: MESSAGE RECEIVED ===');
     console.log('Background: Action:', request.action);
@@ -24,13 +47,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     console.log('Background: Has authToken:', !!request.authToken);
     
     switch (request.action) {
-      case 'syncAuthToken':
-        // Sync auth token from Fuze platform to extension
-        console.log('Background: Syncing auth token from Fuze platform, token length:', request.token ? request.token.length : 0);
-        
+      case 'webSession':
+        // Signed in on the Fuze web app
+        if (typeof request.accessToken !== 'string' || !request.accessToken) break;
         {
           chrome.storage.local.set({
-            authToken: request.token
+            authToken: request.accessToken
           }, () => {
             if (chrome.runtime.lastError) {
               console.error('Background: Error syncing auth token:', chrome.runtime.lastError);
@@ -50,7 +72,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
         break;
 
-      case 'clearAuthToken':
+      case 'webSignedOut':
         // Clear auth token (user logged out)
         console.log('Background: Clearing auth token due to logout');
         chrome.storage.local.remove('authToken', () => {
@@ -204,11 +226,48 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   } catch (error) {
     console.error('Background: Error handling message:', error);
   }
+}
+
+// The sign-in bridge on Fuze preview deployments (and local dev servers in dev builds) is opt-in
+// from the options page, which asks for the host permission. Keep the registered scripts in step
+// with those settings and with permissions the user may revoke in chrome://extensions.
+const BRIDGE_FILES = ['lib/config.js', 'content/fuze-bridge.js'];
+
+async function syncBridgeRegistrations() {
+  const { allowPreviews, allowLocalhost } = await chrome.storage.local.get(['allowPreviews', 'allowLocalhost']);
+  const wanted = [];
+  if (allowPreviews && await chrome.permissions.contains({ origins: [FuzeConfig.PREVIEW_PERMISSION] })) {
+    wanted.push({ id: 'fuze-bridge-previews', matches: [FuzeConfig.PREVIEW_PERMISSION] });
+  }
+  if (FuzeConfig.DEV_BUILD && allowLocalhost && await chrome.permissions.contains({ origins: FuzeConfig.DEV_PERMISSIONS })) {
+    wanted.push({ id: 'fuze-bridge-dev', matches: FuzeConfig.DEV_PERMISSIONS });
+  }
+  const existing = (await chrome.scripting.getRegisteredContentScripts())
+    .filter((script) => script.id.startsWith('fuze-bridge-'));
+  const stale = existing.filter((script) => !wanted.some((w) => w.id === script.id)).map((script) => script.id);
+  if (stale.length) await chrome.scripting.unregisterContentScripts({ ids: stale });
+  const missing = wanted.filter((w) => !existing.some((script) => script.id === w.id));
+  if (missing.length) {
+    await chrome.scripting.registerContentScripts(missing.map((w) => ({
+      ...w, js: BRIDGE_FILES, runAt: 'document_idle', allFrames: false, persistAcrossSessions: true,
+    })));
+  }
+}
+
+function resyncBridges() {
+  syncBridgeRegistrations().catch((e) => console.error('Background: bridge registration failed:', e.message));
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && ('allowPreviews' in changes || 'allowLocalhost' in changes)) resyncBridges();
 });
+chrome.permissions.onAdded.addListener(resyncBridges);
+chrome.permissions.onRemoved.addListener(resyncBridges);
 
 // Initialize
 chrome.runtime.onInstalled.addListener(() => {
   migrateApiUrlSetting().catch((e) => console.error('Background: settings migration failed:', e.message));
+  resyncBridges();
   try {
     chrome.storage.local.get('autoSync', (data) => {
       if (chrome.runtime.lastError) {

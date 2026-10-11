@@ -21,6 +21,17 @@
       </div>
       <p id="api-status" class="status" role="status"></p>
     </section>
+
+    <section id="web-section">
+      <h2>Signing in from the web app</h2>
+      <p class="hint">Signing in on <span id="web-origin"></span> signs the extension in too.</p>
+      <label class="check"><input type="checkbox" id="allow-previews">
+        <span>Also from Fuze preview deployments (itsfuze-&hellip;-ujjwaljain16s-projects.vercel.app). Asks
+          for access to vercel.app pages; the extension only acts on Fuze's own previews.</span></label>
+      <label class="check" id="localhost-row" hidden><input type="checkbox" id="allow-localhost">
+        <span>Development build: also from local dev servers (localhost, 127.0.0.1).</span></label>
+      <p id="web-status" class="status" role="status"></p>
+    </section>
   </main>
   <script src="../lib/config.js"></script>
   <script src="options.js"></script>

@@ -9,6 +9,7 @@
     "bookmarks",
     "storage",
     "activeTab",
+    "scripting",
     "notifications",
     "contextMenus"
   ],
@@ -37,12 +38,8 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "https://itsfuze.vercel.app/*",
-        "http://localhost:5173/*",
-        "https://localhost:5173/*"
-      ],
-      "js": ["content.js"],
+      "matches": ["https://itsfuze.vercel.app/*"],
+      "js": ["lib/config.js", "content/fuze-bridge.js"],
       "run_at": "document_idle"
     }
   ],

@@ -36,6 +36,11 @@ async function processBookmarkFromExtension({ title, url, description = '', tags
   return await response.json();
 }
 
+// Only our own service worker may update the popup; content scripts and other extensions can't.
+function fromServiceWorker(sender) {
+  return Boolean(sender) && sender.id === chrome.runtime.id && !sender.tab;
+}
+
 document.addEventListener('DOMContentLoaded', function() {
   const form = document.getElementById('bookmark-form');
   const statusMessage = document.getElementById('status-message');
@@ -164,6 +169,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // Listen for auth status changes from background script
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (!fromServiceWorker(sender)) return;
     if (request.action === 'authStatusChanged') {
       // Don't interrupt import in progress
       if (importInProgress) {
@@ -629,6 +635,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Listen for SSE data from background script
         sseListener = (message, sender, sendResponse) => {
+          if (!fromServiceWorker(sender)) return;
           console.log('Popup: Received message from background:', message.action);
           
           if (message.action === 'sseStreamStarted') {

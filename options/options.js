@@ -64,4 +64,40 @@ document.getElementById('reset-api').addEventListener('click', async () => {
   showApiStatus(changed ? 'Using Fuze. Sign in again.' : 'Already using Fuze.');
 });
 
+// --- signing in from preview deployments and local dev servers ---
+
+const webStatus = document.getElementById('web-status');
+
+async function loadWebOrigins() {
+  document.getElementById('web-origin').textContent = FuzeConfig.FUZE_WEB_ORIGIN;
+  document.getElementById('localhost-row').hidden = !FuzeConfig.DEV_BUILD;
+  const { allowPreviews, allowLocalhost } = await chrome.storage.local.get(['allowPreviews', 'allowLocalhost']);
+  document.getElementById('allow-previews').checked = !!allowPreviews;
+  document.getElementById('allow-localhost').checked = !!allowLocalhost;
+}
+
+// The service worker registers or removes the bridge when these settings change.
+function bindOriginToggle(id, key, origins) {
+  const box = document.getElementById(id);
+  box.addEventListener('change', async () => {
+    webStatus.textContent = '';
+    if (box.checked) {
+      const granted = await chrome.permissions.request({ origins });
+      if (!granted) {
+        box.checked = false;
+        webStatus.textContent = 'Permission not granted.';
+        return;
+      }
+      await chrome.storage.local.set({ [key]: true });
+    } else {
+      await chrome.storage.local.set({ [key]: false });
+      await chrome.permissions.remove({ origins }).catch(() => {});
+    }
+  });
+}
+
+bindOriginToggle('allow-previews', 'allowPreviews', [FuzeConfig.PREVIEW_PERMISSION]);
+bindOriginToggle('allow-localhost', 'allowLocalhost', FuzeConfig.DEV_PERMISSIONS);
+
 loadApiBase();
+loadWebOrigins();
