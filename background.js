@@ -310,59 +310,22 @@ const isChromeInternalUrl = (url) => {
   }
 };
 
-// Helper function to normalize URL
-const normalizeUrl = (url) => {
-  try {
-    const urlObj = new URL(url);
-    // Remove trailing slashes, normalize protocol, and convert to lowercase
-    return urlObj.toString().replace(/\/$/, '').toLowerCase();
-  } catch (e) {
-    console.error('Error normalizing URL:', url, e);
-    return url.toLowerCase();
-  }
-};
-
-// Cache to store URL to bookmark ID mapping
-const bookmarkCache = new Map();
-
-// Function to get bookmark ID from URL
+// The Fuze id of the bookmark saved under exactly this URL, or null when there is none.
 async function getBookmarkId(url) {
-  try {
-    const normalizedUrl = normalizeUrl(url);
-    
-    // First check cache
-    if (bookmarkCache.has(normalizedUrl)) {
-      return bookmarkCache.get(normalizedUrl);
+  const apiUrl = await getApiBase();
+  const authToken = await getAuthToken();
+  if (!authToken) return null;
+
+  const response = await fetch(`${apiUrl}${FuzeConfig.bookmarkLookupPath(url)}`, {
+    headers: {
+      'Authorization': `Bearer ${authToken}`,
+      'Accept': 'application/json'
     }
-    
-    // If not in cache, fetch all bookmarks and find the matching one
-    const apiUrl = await getApiBase();
-    
-    const authToken = await getAuthToken();
-    if (!authToken) return null;
-    
-    const response = await fetch(`${apiUrl}/api/bookmarks`, {
-      headers: {
-        'Authorization': `Bearer ${authToken}`,
-        'Accept': 'application/json'
-      }
-    });
-    if (!response.ok) return null;
-    
-    const data = await response.json();
-    const bookmark = data.bookmarks.find(b => normalizeUrl(b.url) === normalizedUrl);
-    
-    if (bookmark) {
-      // Update cache
-      bookmarkCache.set(normalizedUrl, bookmark.id);
-      return bookmark.id;
-    }
-    
-    return null;
-  } catch (error) {
-    console.error('Error getting bookmark ID:', error);
-    return null;
-  }
+  });
+  if (response.status === 404) return null;
+  if (!response.ok) throw new Error(`Lookup failed: HTTP ${response.status}`);
+  const data = await response.json();
+  return data.bookmark ? data.bookmark.id : null;
 }
 
 // Handle bookmark creation
@@ -431,11 +394,6 @@ chrome.bookmarks.onCreated.addListener(async (id) => {
 
     const result = await response.json();
     
-    // Store the bookmark ID in cache for future reference
-    if (result.bookmark && result.bookmark.id) {
-      bookmarkCache.set(normalizeUrl(bookmark.url), result.bookmark.id);
-    }
-    
     // Show appropriate notification based on whether it was a duplicate
     chrome.notifications.create({
       type: 'basic',
@@ -503,57 +461,23 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
       throw new Error('Not authenticated. Please log in to Fuze.');
     }
 
-    // Get the bookmark ID from the URL
+    // Resolve the exact URL to its Fuze id, then delete by id.
     const bookmarkId = await getBookmarkId(bookmarkUrl);
-    
     if (!bookmarkId) {
-      console.log('Bookmark ID not found for URL:', bookmarkUrl);
-      throw new Error('Bookmark not found in Fuze');
+      // Never saved to Fuze (or already removed there): nothing to do.
+      return;
     }
-    
-    console.log('Found bookmark ID for deletion:', bookmarkId);
-    
-    // Delete by ID endpoint
-    const deleteEndpoint = `${apiUrl}/api/bookmarks/${bookmarkId}`;
-    
-    // Send delete request to API
-    const response = await fetch(deleteEndpoint, {
+
+    const response = await fetch(`${apiUrl}/api/bookmarks/${bookmarkId}`, {
       method: 'DELETE',
       headers: {
-        'Content-Type': 'application/json',
         'Accept': 'application/json',
         'Authorization': `Bearer ${authToken}`
       }
     });
-
-    if (!response.ok) {
-      // If ID-based deletion fails, try deleting by URL as fallback
-      console.log('ID-based deletion failed, trying URL-based deletion');
-      
-      const normalizedUrl = normalizeUrl(bookmarkUrl);
-      const encodedUrl = encodeURIComponent(normalizedUrl);
-      const urlDeleteEndpoint = `${apiUrl}/api/bookmarks/url/${encodedUrl}`;
-      
-      const urlResponse = await fetch(urlDeleteEndpoint, {
-        method: 'DELETE',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          'Authorization': `Bearer ${authToken}`
-        }
-      });
-      
-      if (!urlResponse.ok) {
-        const errorData = await urlResponse.json().catch(() => ({}));
-        throw new Error(errorData.message || `HTTP error! status: ${urlResponse.status}`);
-      }
-      
-      // Remove from cache
-      bookmarkCache.delete(normalizedUrl);
-    } else {
-      // Remove from cache if ID-based deletion was successful
-      const normalizedUrl = normalizeUrl(bookmarkUrl);
-      bookmarkCache.delete(normalizedUrl);
+    if (!response.ok && response.status !== 404) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
     }
 
     console.log('Bookmark removed from Fuze successfully');
@@ -569,7 +493,6 @@ chrome.bookmarks.onRemoved.addListener(async (id, removeInfo) => {
     console.error('Error removing bookmark from Fuze:', {
       error: error.message,
       bookmarkUrl: removeInfo?.node?.url,
-      normalizedUrl: removeInfo?.node?.url ? normalizeUrl(removeInfo.node.url) : null,
       apiUrl: await getApiBase()
     });
 
@@ -617,10 +540,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         message: 'Bookmark saved successfully!'
       });
       
-      // Update cache with bookmark ID
-      if (saved && saved.bookmark && saved.bookmark.id) {
-        bookmarkCache.set(normalizeUrl(url), saved.bookmark.id);
-      }
     } catch (error) {
       console.error('Error saving bookmark:', error);
       chrome.notifications.create({

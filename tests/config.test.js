@@ -39,6 +39,14 @@ test('originPermission is the match pattern for the whole origin', () => {
   assert.equal(config.originPermission('https://api.example.com'), 'https://api.example.com/*');
 });
 
+test('bookmarkLookupPath sends the URL exactly, case and all', () => {
+  const url = 'https://Example.com/Docs/Page%20One?Id=7&b=2#Frag';
+  const path = config.bookmarkLookupPath(url);
+  assert.ok(path.startsWith('/api/bookmarks/lookup?url='));
+  const sent = new URL('https://api.test' + path).searchParams.get('url');
+  assert.equal(sent, url);
+});
+
 test('isSaveableUrl accepts web pages only', () => {
   assert.ok(config.isSaveableUrl('https://example.com/a'));
   assert.ok(config.isSaveableUrl('http://example.com'));
