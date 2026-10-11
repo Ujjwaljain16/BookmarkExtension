@@ -1,0 +1,11 @@
+{
+  "name": "fuze-web-clipper",
+  "private": true,
+  "description": "Development scripts only; the extension itself has no dependencies.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

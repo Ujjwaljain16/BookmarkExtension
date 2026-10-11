@@ -1,0 +1,4 @@
+# The release zip is built from the committed blobs; keep them LF everywhere so a checkout on
+# Windows (core.autocrlf=true) and one on Linux produce the same bytes.
+* text=auto eol=lf
+*.png binary
