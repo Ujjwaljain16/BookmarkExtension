@@ -90,14 +90,51 @@ function normalizeTags(tags) {
   return [...new Set(list.map((t) => String(t).trim()).filter(Boolean))].slice(0, 50);
 }
 
-async function saveBookmark({ url, title, description = '', tags = [], category }) {
-  const body = { url, title: String(title || '').slice(0, 500), description, tags: normalizeTags(tags) };
-  if (category) body.category = category;
-  const data = await session.apiJson('/api/bookmarks', {
+// Pages Chrome never lets extensions script.
+const UNSCRIPTABLE_HOSTS = ['chromewebstore.google.com', 'chrome.google.com'];
+
+/**
+ * Read the rendered page in the tab being saved (lib/capture.js), so the server gets what the
+ * user sees even behind a login or built by scripts. Needs the activeTab grant that the popup or
+ * context menu click gives. Returns the `captured` payload, or undefined when unavailable.
+ */
+async function captureTab(tab) {
+  const { capturePages } = await chrome.storage.local.get('capturePages');
+  if (capturePages === false || !tab || !isSaveableUrl(tab.url)) return undefined;
+  if (UNSCRIPTABLE_HOSTS.includes(new URL(tab.url).hostname)) return undefined;
+  try {
+    const [injection] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['lib/capture.js'] });
+    const page = injection && injection.result;
+    // The tab may have navigated meanwhile; never attach another page's content.
+    if (!page || page.url !== tab.url || !page.captured) return undefined;
+    return page.captured;
+  } catch (error) {
+    logError('page capture', error); // PDF viewer, error pages, revoked grant: save without it
+    return undefined;
+  }
+}
+
+async function postBookmark(body) {
+  return session.apiJson('/api/bookmarks', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+}
+
+async function saveBookmark({ url, title, description = '', tags = [], category, captured }) {
+  const body = { url, title: String(title || '').slice(0, 500), description, tags: normalizeTags(tags) };
+  if (category) body.category = category;
+  if (captured) body.captured = captured;
+  let data;
+  try {
+    data = await postBookmark(body);
+  } catch (error) {
+    // A capture the server won't take must not cost the bookmark: retry without it.
+    if (!captured || (error.status !== 413 && error.status !== 400)) throw error;
+    delete body.captured;
+    data = await postBookmark(body);
+  }
   return {
     bookmarkId: data.bookmark ? data.bookmark.id : null,
     wasDuplicate: Boolean(data.wasDuplicate),
@@ -186,7 +223,8 @@ const handlers = {
   async saveTab({ tabId, title, description, tags }) {
     const tab = await chrome.tabs.get(tabId);
     if (!tab.url || !isSaveableUrl(tab.url)) throw new Error('Only web pages can be saved');
-    return saveBookmark({ url: tab.url, title: title || tab.title, description, tags });
+    const captured = await captureTab(tab);
+    return saveBookmark({ url: tab.url, title: title || tab.title, description, tags, captured });
   },
 
   async startImport({ limit }) {
@@ -271,7 +309,9 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
       notify('Fuze', 'Only web pages can be saved.');
       return;
     }
-    const result = await saveBookmark({ url, title });
+    // The page itself can be captured (the click granted activeTab); a link points elsewhere.
+    const captured = info.menuItemId === 'save-page' && tab && tab.url === url ? await captureTab(tab) : undefined;
+    const result = await saveBookmark({ url, title, captured });
     notify(result.wasDuplicate ? 'Already in Fuze (updated)' : 'Saved to Fuze', title || url);
   })().catch((error) => notify('Could not save to Fuze', describeError(error)));
 });

@@ -139,6 +139,13 @@ document.getElementById('signout-btn').addEventListener('click', async () => {
   loadAccount();
 });
 
+chrome.storage.local.get('capturePages').then(({ capturePages }) => {
+  document.getElementById('capture-pages').checked = capturePages !== false;
+});
+document.getElementById('capture-pages').addEventListener('change', (e) => {
+  chrome.storage.local.set({ capturePages: e.target.checked });
+});
+
 document.getElementById('auto-sync').addEventListener('change', (e) => {
   chrome.storage.local.set({ autoSync: e.target.checked });
 });
