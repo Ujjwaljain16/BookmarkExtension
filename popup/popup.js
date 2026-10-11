@@ -206,6 +206,14 @@ document.addEventListener('DOMContentLoaded', function() {
     redirectToFuzeLogin();
   });
 
+  const googleAuthBtn = document.getElementById('google-auth-btn');
+  if (googleAuthBtn) {
+    googleAuthBtn.addEventListener('click', function(e) {
+      e.preventDefault();
+      redirectToFuzeLogin();
+    });
+  }
+
   signupRedirectBtn.addEventListener('click', function(e) {
     e.preventDefault();
     redirectToFuzeSignup();

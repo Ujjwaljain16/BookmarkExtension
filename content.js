@@ -79,72 +79,91 @@ function sendMessageToExtension(message) {
   });
 }
 
+// Helper function to extract auth token from localStorage
+function getStoredAuthToken() {
+  try {
+    let token = localStorage.getItem('token') || localStorage.getItem('access_token');
+    if (token && token !== 'null' && token !== 'undefined') {
+      return token;
+    }
+    const userStr = localStorage.getItem('user');
+    if (userStr) {
+      const userObj = JSON.parse(userStr);
+      token = userObj?.access_token || userObj?.token;
+      if (token && token !== 'null' && token !== 'undefined') {
+        return token;
+      }
+    }
+  } catch (e) {
+    console.warn('Fuze Content Script: Error parsing stored auth token:', e);
+  }
+  return null;
+}
+
 // Function to check if user is logged in on Fuze platform
 function checkFuzeAuthentication() {
-  // Check for auth token in localStorage (Fuze platform stores it as 'token')
-  const authToken = localStorage.getItem('token');
+  const authToken = getStoredAuthToken();
 
-  // Reduced logging - only log errors
   if (authToken) {
-    // Send auth token to extension background script
     sendMessageToExtension({
       action: 'syncAuthToken',
       token: authToken,
       source: 'fuze_platform'
     }).catch((error) => {
       console.error('Fuze Content Script: Failed to send token sync message:', error.message);
-      // Don't throw - just log the error
     });
 
     return true;
   } else {
-    // User not logged in - no need to log
     return false;
   }
 }
 
 // Function to check for logout events
 function watchForLogout() {
-  // Watch for localStorage changes (logout would clear authToken)
+  // Watch for localStorage changes (logout would clear authToken or user)
   const originalSetItem = localStorage.setItem;
   const originalRemoveItem = localStorage.removeItem;
   const originalClear = localStorage.clear;
 
   localStorage.setItem = function(key, value) {
-    if (key === 'token') {
-      if (!value || value === 'null' || value === 'undefined') {
-        // Token was cleared - user logged out
+    const res = originalSetItem.apply(this, arguments);
+    if (['token', 'user', 'access_token'].includes(key)) {
+      const token = getStoredAuthToken();
+      if (token) {
+        sendMessageToExtension({
+          action: 'syncAuthToken',
+          token: token,
+          source: 'fuze_platform_login'
+        }).catch((error) => {
+          console.error('Fuze Content Script: Failed to send login message:', error.message);
+        });
+      } else {
         sendMessageToExtension({
           action: 'clearAuthToken',
           source: 'fuze_platform_logout'
         }).catch((error) => {
           console.error('Fuze Content Script: Failed to send logout message:', error.message);
         });
-      } else {
-        // Token was set - user logged in
-        sendMessageToExtension({
-          action: 'syncAuthToken',
-          token: value,
-          source: 'fuze_platform_login'
-        }).catch((error) => {
-          console.error('Fuze Content Script: Failed to send login message:', error.message);
-        });
       }
     }
-    return originalSetItem.apply(this, arguments);
+    return res;
   };
 
   localStorage.removeItem = function(key) {
-    if (key === 'token') {
-      // Token was removed - user logged out
-      sendMessageToExtension({
-        action: 'clearAuthToken',
-        source: 'fuze_platform_logout'
-      }).catch((error) => {
-        console.error('Fuze Content Script: Failed to send remove token message:', error.message);
-      });
+    const res = originalRemoveItem.apply(this, arguments);
+    if (['token', 'user', 'access_token'].includes(key)) {
+      const token = getStoredAuthToken();
+      if (!token) {
+        sendMessageToExtension({
+          action: 'clearAuthToken',
+          source: 'fuze_platform_logout'
+        }).catch((error) => {
+          console.error('Fuze Content Script: Failed to send remove token message:', error.message);
+        });
+      }
     }
-    return originalRemoveItem.apply(this, arguments);
+    return res;
   };
 
   localStorage.clear = function() {
