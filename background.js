@@ -62,6 +62,8 @@ const tokenStore = {
 // the token, and keeps the new pair for 60 s for a client that asks again with the old one. This
 // alarm wakes the worker after 30 s (Chrome's minimum) to ask again, so the session survives.
 const REFRESH_RETRY_ALARM = 'fuze-refresh-retry';
+// How long the popup keeps explaining a failed hand-off from the website.
+const HANDOFF_MEMORY_MS = 15 * 60 * 1000;
 
 const session = createSession({
   fetchImpl: (url, init) => fetch(url, init),
@@ -209,7 +211,12 @@ const handlers = {
   async getStatus({ verify }) {
     const settings = await getSettings();
     const status = { signedIn: await session.isSignedIn(), apiBase: settings.apiBase, settings };
-    if (!status.signedIn || !verify) return status;
+    if (!status.signedIn) {
+      const { handoff } = await chrome.storage.session.get('handoff');
+      if (handoff && Date.now() - handoff.at < HANDOFF_MEMORY_MS) status.handoff = handoff.result;
+      return status;
+    }
+    if (!verify) return status;
     try {
       const data = await session.apiJson('/api/auth/verify');
       const user = data.user || {};
@@ -273,7 +280,13 @@ const handlers = {
   async webSession({ refreshToken }) {
     if (typeof refreshToken !== 'string' || !refreshToken) return { result: 'ignored' };
     const result = await session.adoptWebSession(refreshToken);
-    if (result === 'adopted') broadcast({ action: 'authChanged', signedIn: true });
+    // Remember why a hand-off failed, so the popup can say so instead of asking to sign in again.
+    if (result === 'unreachable' || result === 'rejected') {
+      await chrome.storage.session.set({ handoff: { result, at: Date.now() } });
+    } else if (result === 'adopted' || result === 'unchanged') {
+      await chrome.storage.session.remove('handoff');
+    }
+    if (result !== 'ignored') broadcast({ action: 'authChanged', signedIn: result === 'adopted' || result === 'unchanged' });
     return { result };
   },
 

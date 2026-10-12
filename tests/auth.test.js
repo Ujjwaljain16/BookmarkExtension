@@ -228,3 +228,21 @@ test('a failing wake-up hook never breaks the refresh', async () => {
   assert.equal(await s.refresh(), 'a2');
   assert.equal(store.peek().refreshToken, 'r2');
 });
+
+test('a hand-off says whether the server was unreachable or the web session was refused', async () => {
+  const web = jwt({ sub: '7', type: 'refresh' });
+  const cases = [
+    ['server paused (HTML 206 page)', () => ({ status: 206, ok: true, json: async () => { throw new SyntaxError('not JSON'); } }), 'unreachable'],
+    ['server error', () => json(503, {}), 'unreachable'],
+    ['network down', () => { throw new TypeError('Failed to fetch'); }, 'unreachable'],
+    ['web session ended', () => json(401, { error: 'invalid_refresh_token' }), 'rejected'],
+    ['ok', () => json(200, { access_token: 'a1', refresh_token: 'r1', user: { id: 7 } }), 'adopted'],
+  ];
+  for (const [name, route, expected] of cases) {
+    const store = memoryStore();
+    const api = fakeApi({ 'POST /api/auth/fork-session': route });
+    const result = await session(store, api).adoptWebSession(web);
+    assert.equal(result, expected, name);
+    assert.equal(Boolean(store.peek().refreshToken), expected === 'adopted', `${name}: tokens stored only on success`);
+  }
+});

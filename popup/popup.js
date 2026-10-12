@@ -22,7 +22,18 @@ function showConnection(status) {
     label.style.color = '#dc2626';
   }
   $('auth-prompt').hidden = Boolean(status.signedIn);
+  if (!status.signedIn) {
+    $('auth-prompt-text').textContent = HANDOFF_TEXT[status.handoff] || HANDOFF_TEXT.default;
+    $('login-redirect-btn').textContent = status.handoff === 'unreachable' ? 'Try again' : 'Sign in to Fuze';
+  }
 }
+
+// What the popup says while signed out, after the last hand-off from the website (if any).
+const HANDOFF_TEXT = {
+  default: 'Sign in on the Fuze website with Google or email. The extension connects by itself.',
+  unreachable: "You're signed in on the Fuze website, but Fuze's server can't be reached right now. Try again in a few minutes.",
+  rejected: 'Your session on the Fuze website has ended. Sign in there again and the extension will follow.',
+};
 
 async function refreshStatus() {
   showConnection(await send({ action: 'getStatus', verify: true }));
