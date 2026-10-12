@@ -195,3 +195,36 @@ test('decodeJwtPayload reads base64url claims and rejects garbage', () => {
     assert.equal(decodeJwtPayload(bad), null, String(bad));
   }
 });
+
+test('a retry wake-up is scheduled before each refresh and cancelled once it settles', async () => {
+  for (const [status, expectOk] of [[200, true], [503, false]]) {
+    const store = memoryStore({ refreshToken: 'r1', userId: '7' });
+    const events = [];
+    const api = fakeApi({
+      'POST /api/auth/refresh': async () => {
+        events.push('request');
+        return json(status, { access_token: 'a2', refresh_token: 'r2' });
+      },
+    });
+    const s = createSession({
+      fetchImpl: api.fetchImpl, store, getApiBase: async () => API,
+      onRefreshStart: () => events.push('start'),
+      onRefreshSettled: () => events.push('settled'),
+    });
+    const outcome = await s.refresh().then(() => true, () => false);
+    assert.equal(outcome, expectOk);
+    assert.deepEqual(events, ['start', 'request', 'settled'], `HTTP ${status}`);
+  }
+});
+
+test('a failing wake-up hook never breaks the refresh', async () => {
+  const store = memoryStore({ refreshToken: 'r1' });
+  const api = fakeApi({ 'POST /api/auth/refresh': () => json(200, { access_token: 'a2', refresh_token: 'r2' }) });
+  const s = createSession({
+    fetchImpl: api.fetchImpl, store, getApiBase: async () => API,
+    onRefreshStart: () => { throw new Error('alarms unavailable'); },
+    onRefreshSettled: () => Promise.reject(new Error('alarms unavailable')),
+  });
+  assert.equal(await s.refresh(), 'a2');
+  assert.equal(store.peek().refreshToken, 'r2');
+});

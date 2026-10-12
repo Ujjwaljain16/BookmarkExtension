@@ -35,7 +35,8 @@ The access token is kept in `chrome.storage.session`, the refresh token in `chro
 ## Permissions
 
 `bookmarks`, `storage`, `activeTab` (the tab you save), `scripting` (page capture on save, and the
-optional preview bridge), `notifications`, `contextMenus`, and host access to the Fuze API only.
+optional preview bridge), `notifications`, `contextMenus`, `alarms` (retries a token refresh if
+Chrome stops the extension mid-request), and host access to the Fuze API only.
 Other hosts are optional and requested at runtime.
 
 ## Development

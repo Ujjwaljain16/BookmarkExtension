@@ -58,11 +58,25 @@ const tokenStore = {
   },
 };
 
+// Chrome can stop this worker while a refresh is in flight. The server then has already rotated
+// the token, and keeps the new pair for 60 s for a client that asks again with the old one. This
+// alarm wakes the worker after 30 s (Chrome's minimum) to ask again, so the session survives.
+const REFRESH_RETRY_ALARM = 'fuze-refresh-retry';
+
 const session = createSession({
   fetchImpl: (url, init) => fetch(url, init),
   store: tokenStore,
   getApiBase,
   onSignedOut: () => broadcast({ action: 'authChanged', signedIn: false }),
+  onRefreshStart: () => chrome.alarms.create(REFRESH_RETRY_ALARM, { delayInMinutes: 0.5 }),
+  onRefreshSettled: () => chrome.alarms.clear(REFRESH_RETRY_ALARM),
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== REFRESH_RETRY_ALARM) return;
+  session.isSignedIn()
+    .then((signedIn) => (signedIn ? session.refresh() : null))
+    .catch(() => {}); // signed out or offline: the next API call handles it
 });
 
 // --- helpers ----------------------------------------------------------------------------------
