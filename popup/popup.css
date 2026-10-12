@@ -305,6 +305,12 @@ input:checked + .slider:before {
 .auth-prompt-footer {
   border-top: 1px solid rgba(77, 208, 225, 0.2);
   padding-top: 1rem;
+  color: #9ca3af;
+  font-size: 0.75rem;
+}
+
+.auth-prompt-footer .sep {
+  margin: 0 0.4rem;
 }
 
 .auth-prompt-footer a {

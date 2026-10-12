@@ -54,8 +54,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('settings-link').addEventListener('click', (e) => { e.preventDefault(); chrome.runtime.openOptionsPage(); });
   $('extension-settings-link').addEventListener('click', (e) => { e.preventDefault(); chrome.runtime.openOptionsPage(); });
   $('login-redirect-btn').addEventListener('click', () => openWeb('/login'));
-  $('google-auth-btn').addEventListener('click', () => openWeb('/login'));
-  $('signup-redirect-btn').addEventListener('click', () => openWeb('/signup'));
+  $('signup-link').addEventListener('click', (e) => { e.preventDefault(); openWeb('/signup'); });
 
   $('bookmark-form').addEventListener('submit', async (e) => {
     e.preventDefault();
