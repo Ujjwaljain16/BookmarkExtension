@@ -3,7 +3,8 @@
   "private": true,
   "description": "Development scripts only; the extension itself has no dependencies.",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "build:dev": "node scripts/build-dev.js"
   },
   "engines": {
     "node": ">=20"

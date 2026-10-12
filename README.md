@@ -43,6 +43,9 @@ Other hosts are optional and requested at runtime.
 
 - Load unpacked: `chrome://extensions` → Developer mode → Load unpacked → this folder.
 - Tests: `npm test` (Node 20+, no dependencies).
-- Local servers: set `DEV_BUILD = true` in `lib/config.js` (never in a release); the options page
-  then accepts `http://localhost` API servers and sign-ins from local dev servers.
+- Local servers: `npm run build:dev` writes `dev-build/`, a copy that uses the local backend
+  (`http://127.0.0.1:5000`) and takes its sign-in from the local web app (`http://localhost:5173`).
+  Load `dev-build/` unpacked (disable the release build first) and sign in on the local web app.
+  Other ports: `FUZE_DEV_API=http://127.0.0.1:8000 FUZE_DEV_WEB=http://localhost:3000 npm run build:dev`.
+  The release files never change; `dev-build/` is not committed.
 - Releases are built by the Fuze repository from a pinned commit of this repository; see its docs.
