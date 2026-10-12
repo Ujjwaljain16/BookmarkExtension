@@ -105,6 +105,11 @@ const accountMsg = document.getElementById('account-msg');
 
 async function loadAccount() {
   const status = await send({ action: 'getStatus', verify: true });
+  if (!status || status.error || !status.settings) {
+    document.getElementById('account-status').textContent =
+      `Could not read the extension's state${status && status.error ? ': ' + status.error : ''}. Reload this page.`;
+    return;
+  }
   const who = status.user && (status.user.username || status.user.email);
   document.getElementById('account-status').textContent = status.signedIn
     ? `Signed in${who ? ' as ' + who : ''}${status.offline ? ' (server unreachable)' : ''}.`

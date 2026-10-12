@@ -42,6 +42,9 @@ test('local dev servers count only in dev builds', () => {
 test('our own extension pages are "extension"', () => {
   const sender = { id: RUNTIME_ID, url: `${EXT_ORIGIN}/popup/popup.html`, origin: EXT_ORIGIN };
   assert.equal(classifySender(sender, ctx), 'extension');
+  // options_ui.open_in_tab: the options page sends from a tab of its own
+  const options = { id: RUNTIME_ID, tab: { id: 9 }, frameId: 0, url: `${EXT_ORIGIN}/options/options.html`, origin: EXT_ORIGIN };
+  assert.equal(classifySender(options, ctx), 'extension');
 });
 
 test('the bridge in the top frame of the Fuze app is "fuze-web"', () => {
@@ -57,6 +60,7 @@ test('everything else is rejected', () => {
     'no sender id': { url: `${EXT_ORIGIN}/popup/popup.html` },
     'our id but a foreign page URL': { id: RUNTIME_ID, url: 'https://evil.example/' },
     'a lookalike extension origin': { id: RUNTIME_ID, url: `${EXT_ORIGIN}.evil/popup.html` },
+    'our page URL with a foreign origin': { id: RUNTIME_ID, tab: { id: 1 }, frameId: 0, url: `${EXT_ORIGIN}/options/options.html`, origin: 'https://evil.example' },
     'a content script on another site': { id: RUNTIME_ID, tab: { id: 1 }, frameId: 0, url: 'https://evil.example/', origin: 'https://evil.example' },
     'an iframe inside the Fuze app': { id: RUNTIME_ID, tab: { id: 1 }, frameId: 7, url: 'https://itsfuze.vercel.app/', origin: 'https://itsfuze.vercel.app' },
     'a preview without opt-in': { id: RUNTIME_ID, tab: { id: 1 }, frameId: 0, origin: PREVIEWS[0], url: PREVIEWS[0] + '/' },
