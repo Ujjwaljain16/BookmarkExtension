@@ -3,11 +3,12 @@
 // pages ask it through runtime messages, so a single in-flight token refresh covers every caller.
 // Nothing important lives in worker memory (Chrome stops idle workers); state is in storage.
 
-importScripts('lib/config.js', 'lib/messaging.js', 'lib/auth.js');
+importScripts('lib/config.js', 'lib/messaging.js', 'lib/auth.js', 'lib/titles.js');
 
 const { DEFAULT_API_BASE, isSaveableUrl, bookmarkLookupPath } = FuzeConfig;
 const { classifySender, isActionAllowed } = FuzeMessaging;
 const { createSession, AuthRequiredError } = FuzeAuth;
+const { pickTitle } = FuzeTitles;
 
 const EXTENSION_ORIGIN = chrome.runtime.getURL('').replace(/\/$/, '');
 const ICON = 'icons/icon48.png';
@@ -112,7 +113,8 @@ const UNSCRIPTABLE_HOSTS = ['chromewebstore.google.com', 'chrome.google.com'];
 /**
  * Read the rendered page in the tab being saved (lib/capture.js), so the server gets what the
  * user sees even behind a login or built by scripts. Needs the activeTab grant that the popup or
- * context menu click gives. Returns the `captured` payload, or undefined when unavailable.
+ * context menu click gives. Returns { captured, title } (title: what the page calls itself when that is better than
+ * the tab's, or ''), or undefined when unavailable.
  */
 async function captureTab(tab) {
   const { capturePages } = await chrome.storage.local.get('capturePages');
@@ -123,7 +125,7 @@ async function captureTab(tab) {
     const page = injection && injection.result;
     // The tab may have navigated meanwhile; never attach another page's content.
     if (!page || page.url !== tab.url || !page.captured) return undefined;
-    return page.captured;
+    return { captured: page.captured, title: page.title || '' };
   } catch (error) {
     logError('page capture', error); // PDF viewer, error pages, revoked grant: save without it
     return undefined;
@@ -244,8 +246,11 @@ const handlers = {
   async saveTab({ tabId, title, description, tags }) {
     const tab = await chrome.tabs.get(tabId);
     if (!tab.url || !isSaveableUrl(tab.url)) throw new Error('Only web pages can be saved');
-    const captured = await captureTab(tab);
-    return saveBookmark({ url: tab.url, title: title || tab.title, description, tags, captured });
+    const capture = await captureTab(tab);
+    return saveBookmark({
+      url: tab.url, title: pickTitle(title, tab.title, capture && capture.title), description, tags,
+      captured: capture && capture.captured,
+    });
   },
 
   async startImport({ limit }) {
@@ -337,8 +342,10 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
       return;
     }
     // The page itself can be captured (the click granted activeTab); a link points elsewhere.
-    const captured = info.menuItemId === 'save-page' && tab && tab.url === url ? await captureTab(tab) : undefined;
-    const result = await saveBookmark({ url, title, captured });
+    const capture = info.menuItemId === 'save-page' && tab && tab.url === url ? await captureTab(tab) : undefined;
+    const result = await saveBookmark({
+      url, title: capture ? pickTitle(title, tab.title, capture.title) : title, captured: capture && capture.captured,
+    });
     notify(result.wasDuplicate ? 'Already in Fuze (updated)' : 'Saved to Fuze', title || url);
   })().catch((error) => notify('Could not save to Fuze', describeError(error)));
 });

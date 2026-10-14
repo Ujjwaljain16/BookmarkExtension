@@ -15,13 +15,17 @@ function el(text, links = []) {
   };
 }
 
-function fakeDoc({ body, parts = {}, title = 'Page', lang = 'en', canonical = null }) {
+function fakeDoc({ body, parts = {}, title = 'Page', lang = 'en', canonical = null, og = null }) {
   return {
     title,
     body,
     documentElement: { lang },
     querySelectorAll: (sel) => parts[sel] || [],
-    querySelector: (sel) => (sel === 'link[rel~="canonical"]' && canonical ? { getAttribute: () => canonical } : null),
+    querySelector: (sel) => {
+      if (sel === 'link[rel~="canonical"]' && canonical) return { getAttribute: () => canonical };
+      if (sel === 'meta[property="og:title"]' && og) return { getAttribute: () => og };
+      return null;
+    },
   };
 }
 
@@ -155,4 +159,40 @@ test('a page without structured data is captured exactly as before', () => {
   const article = words(400, 'a');
   const doc = fakeDoc({ body: el(article), parts: { article: [el(article)] } });
   assert.equal(capture.capturePage(doc, { href: 'https://example.com/x' }).captured.text, article);
+});
+
+// ---- the title of a social post ----
+
+test('a social post is titled by its topic, not the tab\'s "Post | LinkedIn"', () => {
+  const post = `Sample post.\n\n${words(40, 'p')}`;
+  const doc = fakeDoc({ body: el(post), title: 'Post | LinkedIn', og: 'Cloud DevOps Learning Resources | Jane Doe posted on the topic | LinkedIn',
+    parts: { [LD]: [ld(postData(post))] } });
+  const page = capture.capturePage(doc, { href: 'https://www.linkedin.com/posts/x' });
+  assert.equal(page.title, 'Cloud DevOps Learning Resources');
+});
+
+test('a social post without og:title falls back to its own headline, then to the tab\'s title', () => {
+  const post = `Sample post.\n\n${words(40, 'p')}`;
+  const withHeadline = fakeDoc({ body: el(post), title: 'Post | LinkedIn', parts: { [LD]: [ld(postData(post))] } });
+  assert.equal(capture.capturePage(withHeadline, { href: 'https://e.com/p' }).title, 'Sample post');   // postData's headline
+  const noHeadline = { '@type': 'SocialMediaPosting', articleBody: post };
+  const bare = fakeDoc({ body: el(post), title: 'Post | LinkedIn', parts: { [LD]: [ld(noHeadline)] } });
+  assert.equal(capture.capturePage(bare, { href: 'https://e.com/p' }).title, 'Post | LinkedIn');
+});
+
+test('only a social post takes its title from og:title; an article keeps the tab\'s', () => {
+  const full = words(400, 'a');
+  const doc = fakeDoc({ body: el(full), title: 'The Tab Title | Site', og: 'Something Else | Site', parts: { article: [el(full)], [LD]: [ld(postData(words(380, 'a'), 'Article'))] } });
+  assert.equal(capture.capturePage(doc, { href: 'https://example.com/a' }).title, 'The Tab Title | Site');
+});
+
+test('a plain page keeps its own title', () => {
+  const doc = fakeDoc({ body: el(words(300)), title: 'Just a page', og: 'Ignored | Site' });
+  assert.equal(capture.capturePage(doc, { href: 'https://example.com/' }).title, 'Just a page');
+});
+
+test('a very long topic is cut to what the server accepts', () => {
+  const post = `Sample post.\n\n${words(40, 'p')}`;
+  const doc = fakeDoc({ body: el(post), og: 'x'.repeat(900), parts: { [LD]: [ld(postData(post))] } });
+  assert.equal(capture.capturePage(doc, { href: 'https://e.com/p' }).title.length, 500);
 });
