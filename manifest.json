@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Fuze Web Clipper",
   "short_name": "Fuze Clipper",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Save and organize web content with Fuze - your intelligent bookmark manager",
   "minimum_chrome_version": "116",
   "permissions": [

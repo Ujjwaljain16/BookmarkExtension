@@ -97,3 +97,62 @@ test('injected into a page, the script evaluates to the capture', () => {
   assert.equal(result.url, 'https://example.com/members');
   assert.equal(result.captured.text, 'Hello signed-in world');
 });
+
+// ---- pages that publish their item as structured data (a LinkedIn post, an article with an articleBody) ----
+
+const ld = (data) => ({ textContent: JSON.stringify(data) });
+const postData = (body, type = 'SocialMediaPosting') => ({ '@context': 'http://schema.org', '@type': type, headline: 'Sample post', articleBody: body });
+const LD = 'script[type="application/ld+json"]';
+
+test('a social post is captured as the post alone, not the replies and interface around it', () => {
+  const post = `Sample post about a graph problem.\n\n${words(60, 'p')}`;
+  const noisy = `${post}\nLike Comment Share\n${words(300, 'reply')}`;
+  const doc = fakeDoc({ body: el(noisy), title: 'Graph problem | Jane Doe posted on the topic | LinkedIn',
+    parts: { main: [el(noisy)], [LD]: [ld(postData(post))] } });
+  const page = capture.capturePage(doc, { href: 'https://www.linkedin.com/posts/jane-doe_x' });
+  assert.equal(page.captured.text, capture.cleanText(post));
+  assert.ok(!page.captured.text.includes('reply0'));
+  assert.ok(!page.captured.text.includes('Like Comment Share'));
+});
+
+test('the post html carries the metadata and only the post text', () => {
+  const post = `First paragraph.\n\nSecond <paragraph> & more text here, long enough to count.`;
+  const doc = fakeDoc({ body: el(`${post}\nnoise`), parts: { [LD]: [ld(postData(post))] } });
+  const { html } = capture.capturePage(doc, { href: 'https://example.com/p' }).captured;
+  assert.match(html, /application\/ld\+json/);                       // author, date and so on still reach the server
+  assert.match(html, /<article><p>First paragraph\.<\/p><p>Second &lt;paragraph> &amp; more text here/);
+  assert.ok(!html.includes('noise'));
+});
+
+test('an article body is used when it is nearly as long as the page, not when it is an excerpt', () => {
+  const full = words(400, 'a');
+  const doc = (articleBody) => fakeDoc({ body: el(full), parts: { article: [el(full)], [LD]: [ld(postData(articleBody, 'Article'))] } });
+  const kept = capture.capturePage(doc(words(380, 'a')), { href: 'https://example.com/a' }).captured.text;
+  assert.equal(kept, words(380, 'a'));
+  const excerpt = capture.capturePage(doc(words(60, 'a')), { href: 'https://example.com/a' }).captured.text;
+  assert.equal(excerpt, full);                                       // an excerpt must not replace the real article
+});
+
+test('structuredPost reads a list, a @graph and an array of types, and skips bad or short data', () => {
+  const body = words(20, 'x');
+  const find = (scripts) => capture.structuredPost(fakeDoc({ body: el('x'), parts: { [LD]: scripts } }));
+  assert.equal(find([ld([{ '@type': 'Organization' }, postData(body)])]).body, body);
+  assert.equal(find([ld({ '@graph': [postData(body)] })]).social, true);
+  assert.equal(find([ld({ '@type': ['Thing', 'SocialMediaPosting'], articleBody: body })]).social, true);
+  assert.equal(find([{ textContent: '{not json' }, ld(postData(body))]).body, body);   // a bad block is skipped
+  assert.equal(find([ld(postData('too short'))]), null);
+  assert.equal(find([ld({ '@type': 'Product', articleBody: body })]), null);
+  assert.equal(find([]), null);
+});
+
+test('a social post wins over an article in the same page', () => {
+  const body = words(20, 'x');
+  const doc = fakeDoc({ body: el('x'), parts: { [LD]: [ld(postData(words(25, 'article'), 'Article')), ld(postData(body))] } });
+  assert.equal(capture.structuredPost(doc).social, true);
+});
+
+test('a page without structured data is captured exactly as before', () => {
+  const article = words(400, 'a');
+  const doc = fakeDoc({ body: el(article), parts: { article: [el(article)] } });
+  assert.equal(capture.capturePage(doc, { href: 'https://example.com/x' }).captured.text, article);
+});
